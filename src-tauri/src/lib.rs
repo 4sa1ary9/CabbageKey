@@ -28,13 +28,35 @@ struct Session {
 struct AppState(Mutex<Session>);
 
 fn now_iso() -> String {
-    // Lightweight ISO-ish timestamp without pulling chrono.
+    // Readable UTC timestamp. Intentionally does not pull chrono — one
+    // dependency less for a string we generate once per operation.
     use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format!("{secs}")
+    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let total_secs = d.as_secs();
+    // Decompose into civil date via the Neri-Schneider algorithm (fast,
+    // branch-light, correct for all years 1–9999).
+    let s = total_secs as i64;
+    let days = s / 86400;
+    let sec_of_day = s % 86400;
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = y + if mp < 10 { 0 } else { 1 };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        y,
+        mo,
+        day,
+        sec_of_day / 3600,
+        (sec_of_day / 60) % 60,
+        sec_of_day % 60,
+    )
 }
 
 #[derive(serde::Serialize)]

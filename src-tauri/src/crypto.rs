@@ -219,8 +219,8 @@ mod tests {
     // this test prints the real derived key; copy the printed hex into
     // KAT_EXPECTED and flip KAT_PINNED to true. After that the value is frozen
     // and must never change without a FORMAT_VERSION bump + migration.
-    const KAT_PINNED: bool = false;
-    const KAT_EXPECTED: &str = "PASTE_REAL_HEX_HERE";
+    const KAT_PINNED: bool = true;
+    const KAT_EXPECTED: &str = "91a6f09fe7e9dce034acc300fda23db662d32f301cc197ef9e73dd97d4f9f152";
 
     #[test]
     fn kat_derive_key_is_stable() {
