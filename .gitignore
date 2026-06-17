@@ -1,0 +1,24 @@
+# Build output
+/dist/
+node_modules/
+
+# Rust / Cargo
+/src-tauri/target/
+
+# Tauri generated
+/src-tauri/gen/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Vault data must never be committed (defensive — users pick their own path,
+# but guard against accidental local test vaults living in-repo)
+*.vault
+*.vault.bak
+vault.enc*

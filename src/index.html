@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KeyVault</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <!-- ============ 锁屏 / 首次设置 (T11) ============ -->
+    <section id="lock-screen" class="lock-screen">
+      <div class="lock-card">
+        <h1 class="brand">KeyVault</h1>
+        <p class="lock-sub" id="lock-sub">本地加密的 API 密钥收纳箱</p>
+
+        <label class="field">
+          <span>vault 文件</span>
+          <div class="path-row">
+            <input id="vault-path" type="text" placeholder="选择或输入 .vault 文件路径" />
+            <button id="browse-btn" type="button" class="btn-secondary">浏览…</button>
+          </div>
+        </label>
+
+        <label class="field">
+          <span id="pass-label">主密码</span>
+          <input id="master-pass" type="password" autocomplete="off" />
+        </label>
+
+        <!-- 仅首次创建时显示 -->
+        <label class="field" id="confirm-field" hidden>
+          <span>确认主密码</span>
+          <input id="master-pass-confirm" type="password" autocomplete="off" />
+        </label>
+
+        <p class="lock-warn" id="recovery-warn" hidden>
+          ⚠ 主密码无法找回。忘记即永久丢失全部数据，请妥善保管。
+        </p>
+
+        <button id="unlock-btn" type="button" class="btn-primary">解锁</button>
+        <p class="lock-error" id="lock-error" role="alert" aria-live="assertive"></p>
+      </div>
+    </section>
+
+    <!-- ============ 主界面 — 三栏 (D2) ============ -->
+    <main id="app" class="app" hidden>
+      <!-- 顶栏: 搜索常驻 + 主操作 -->
+      <header class="topbar">
+        <div class="search-wrap">
+          <span class="search-icon" aria-hidden="true">🔍</span>
+          <input
+            id="search"
+            type="search"
+            placeholder="搜索用途 / 厂商 / 备注…"
+            aria-label="搜索"
+          />
+        </div>
+        <button id="add-btn" type="button" class="btn-primary">+ 新增</button>
+        <button id="lock-now-btn" type="button" class="btn-secondary" title="锁定">🔒</button>
+      </header>
+
+      <div class="panes">
+        <!-- 左栏: 筛选器 (厂商分组 + 标签) -->
+        <nav class="rail" aria-label="筛选">
+          <button class="rail-all" id="filter-all" data-active="true">
+            全部 <span id="count-all" class="count">0</span>
+          </button>
+          <div class="rail-section">
+            <h2 class="rail-head">厂商</h2>
+            <ul id="vendor-list" class="rail-list"></ul>
+          </div>
+          <div class="rail-section">
+            <h2 class="rail-head">标签</h2>
+            <ul id="tag-list" class="rail-list rail-tags"></ul>
+          </div>
+        </nav>
+
+        <!-- 中列: 记录列表 -->
+        <section class="list-col" aria-label="记录列表">
+          <ul id="record-list" class="record-list"></ul>
+          <div id="empty-state" class="empty-state" hidden></div>
+        </section>
+
+        <!-- 右栏: 详情面板 -->
+        <section class="detail" id="detail" aria-label="详情">
+          <div class="detail-placeholder" id="detail-placeholder">从左侧选择一条记录</div>
+          <div id="detail-content" hidden></div>
+        </section>
+      </div>
+
+      <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    </main>
+
+    <!-- ============ 新增 / 编辑 表单 (模态) ============ -->
+    <dialog id="record-dialog" class="dialog">
+      <form id="record-form" method="dialog">
+        <h2 id="dialog-title">新增密钥</h2>
+        <label class="field">
+          <span>用途名称 <em class="req">*</em></span>
+          <input id="f-name" type="text" required />
+        </label>
+        <label class="field">
+          <span>api_key <em class="req">*</em></span>
+          <input id="f-key" type="text" required />
+        </label>
+        <label class="field">
+          <span>厂商</span>
+          <input id="f-vendor" type="text" list="vendor-options" />
+          <datalist id="vendor-options"></datalist>
+        </label>
+        <label class="field">
+          <span>url</span>
+          <input id="f-url" type="text" />
+        </label>
+        <label class="field">
+          <span>标签（逗号分隔）</span>
+          <input id="f-tags" type="text" placeholder="翻译, 项目A" />
+        </label>
+        <label class="field">
+          <span>备注</span>
+          <textarea id="f-note" rows="2"></textarea>
+        </label>
+        <p class="form-error" id="form-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button type="button" id="form-cancel" class="btn-secondary">取消</button>
+          <button type="submit" id="form-save" class="btn-primary">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
