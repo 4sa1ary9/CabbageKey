@@ -46,3 +46,13 @@ cd src-tauri && cargo test   # Rust 后端测试（crypto KAT + vault CRUD）
 ## 待办
 
 见 `TODOS.md`：CI 跨平台打包发布流水线、完整无障碍审计。
+
+## 文档
+
+`docs/` 目录：
+- `docs/HANDOFF.md` — 交接文档（当前状态、**已知 P0 bug**、修复建议、构建环境）
+- `docs/DESIGN.md` — 完整设计文档（架构决策 D1-D6、三栏 UI、故障模式）
+- `docs/TEST-PLAN.md` — QA 测试计划
+- `docs/tasks-*.jsonl` — 实现任务清单
+
+接手优化先读 `docs/HANDOFF.md`。
