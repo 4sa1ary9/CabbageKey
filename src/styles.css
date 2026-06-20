@@ -35,6 +35,13 @@
   padding: 0;
 }
 
+/* The HTML `hidden` attribute must win over component `display` rules.
+   Without this, `.lock-screen{display:grid}` / `.app{display:flex}` override
+   `[hidden]` and both panes render at once (the lock+app overlap bug). */
+[hidden] {
+  display: none !important;
+}
+
 body {
   font-family: var(--font-sans);
   color: var(--text);
@@ -55,23 +62,29 @@ body {
   border: 1px solid transparent;
   transition: background 0.12s ease;
 }
+
 .btn-primary {
   background: var(--accent);
   color: #fff;
 }
+
 .btn-primary:hover {
   background: var(--accent-hover);
 }
+
 .btn-secondary {
   background: var(--surface);
   border-color: var(--border);
   color: var(--text);
 }
+
 .btn-secondary:hover {
   background: var(--rail-bg);
 }
+
 button:focus-visible,
 input:focus-visible,
+select:focus-visible,
 a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -83,6 +96,7 @@ a:focus-visible {
   place-items: center;
   height: 100vh;
 }
+
 .lock-card {
   width: 360px;
   background: var(--surface);
@@ -93,15 +107,59 @@ a:focus-visible {
   flex-direction: column;
   gap: var(--s3);
 }
+
 .brand {
   font-size: 28px;
   font-weight: 700;
   letter-spacing: -0.02em;
 }
+
 .lock-sub {
   color: var(--text-soft);
   margin-top: calc(-1 * var(--s2));
 }
+
+.lock-choose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.lock-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.remember-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--s2);
+  font-size: 13px;
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+.remember-row input {
+  width: auto;
+}
+
+.link-btn {
+  font: inherit;
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+  align-self: center;
+}
+
+.link-btn:hover {
+  color: var(--accent-hover);
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -109,8 +167,10 @@ a:focus-visible {
   font-size: 13px;
   color: var(--text-soft);
 }
+
 .field input,
-.field textarea {
+.field textarea,
+.field select {
   font: inherit;
   font-size: 14px;
   color: var(--text);
@@ -119,14 +179,32 @@ a:focus-visible {
   border-radius: var(--radius);
   background: var(--surface);
 }
+
+.field-row {
+  display: flex;
+  gap: var(--s2);
+}
+
+.field-narrow {
+  width: 200px;
+  flex-shrink: 0;
+}
+
+.field-wide {
+  flex: 1;
+  min-width: 0;
+}
+
 .path-row {
   display: flex;
   gap: var(--s2);
 }
+
 .path-row input {
   flex: 1;
   min-width: 0;
 }
+
 .lock-warn {
   font-size: 12px;
   color: var(--danger);
@@ -135,11 +213,13 @@ a:focus-visible {
   border-radius: var(--radius);
   padding: var(--s2);
 }
+
 .lock-error {
   color: var(--danger);
   font-size: 13px;
   min-height: 18px;
 }
+
 .req {
   color: var(--danger);
   font-style: normal;
@@ -151,6 +231,7 @@ a:focus-visible {
   flex-direction: column;
   height: 100vh;
 }
+
 .topbar {
   display: flex;
   align-items: center;
@@ -159,17 +240,20 @@ a:focus-visible {
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
+
 .search-wrap {
   flex: 1;
   position: relative;
   display: flex;
   align-items: center;
 }
+
 .search-icon {
   position: absolute;
   left: var(--s2);
   font-size: 13px;
 }
+
 #search {
   width: 100%;
   font: inherit;
@@ -177,6 +261,7 @@ a:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+
 .panes {
   flex: 1;
   display: grid;
@@ -194,6 +279,7 @@ a:focus-visible {
   flex-direction: column;
   gap: var(--s3);
 }
+
 .rail-all {
   font: inherit;
   text-align: left;
@@ -206,12 +292,14 @@ a:focus-visible {
   justify-content: space-between;
   color: var(--text);
 }
+
 .rail-all[data-active="true"],
 .rail-item[data-active="true"] {
   background: var(--accent-soft);
   color: var(--accent-hover);
   font-weight: 600;
 }
+
 .rail-head {
   font-size: 11px;
   text-transform: uppercase;
@@ -220,12 +308,14 @@ a:focus-visible {
   margin-bottom: var(--s1);
   padding: 0 var(--s2);
 }
+
 .rail-list {
   list-style: none;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
+
 .rail-item {
   font: inherit;
   text-align: left;
@@ -239,20 +329,24 @@ a:focus-visible {
   justify-content: space-between;
   color: var(--text-soft);
 }
+
 .rail-item:hover {
   background: #e7e5e4;
 }
+
 .rail-tags {
   flex-direction: row;
   flex-wrap: wrap;
   gap: var(--s1);
 }
+
 .rail-tags .rail-item {
   width: auto;
   font-size: 12px;
   padding: var(--s1) var(--s2);
   border: 1px solid var(--border);
 }
+
 .count {
   color: var(--text-faint);
   font-size: 12px;
@@ -264,23 +358,29 @@ a:focus-visible {
   overflow-y: auto;
   background: var(--surface);
 }
+
 .record-list {
   list-style: none;
 }
+
 .record-item {
   padding: var(--s2) var(--s3);
   border-bottom: 1px solid var(--border);
   cursor: pointer;
 }
+
 .record-item:hover {
   background: var(--rail-bg);
 }
+
 .record-item[data-active="true"] {
   background: var(--accent-soft);
 }
+
 .record-name {
   font-weight: 600;
 }
+
 .record-meta {
   font-size: 12px;
   color: var(--text-faint);
@@ -297,9 +397,11 @@ a:focus-visible {
   align-items: center;
   margin-top: var(--s4);
 }
+
 .empty-state h3 {
   font-size: 16px;
 }
+
 .empty-state p {
   font-size: 13px;
   max-width: 220px;
@@ -310,29 +412,35 @@ a:focus-visible {
   padding: var(--s4);
   overflow-y: auto;
 }
+
 .detail-placeholder {
   color: var(--text-faint);
   text-align: center;
   margin-top: var(--s4);
 }
+
 .detail-title {
   font-size: 18px;
   font-weight: 700;
   margin-bottom: var(--s3);
 }
+
 .detail-field {
   margin-bottom: var(--s3);
 }
+
 .detail-field .label {
   font-size: 12px;
   color: var(--text-faint);
   margin-bottom: var(--s1);
 }
+
 .detail-field .value {
   display: flex;
   align-items: center;
   gap: var(--s2);
 }
+
 .secret,
 .urlval {
   font-family: var(--font-mono);
@@ -343,23 +451,28 @@ a:focus-visible {
   flex: 1;
   word-break: break-all;
 }
+
 .icon-btn {
   font: inherit;
+  font-size: 12px;
   background: none;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: var(--s1) var(--s2);
+  padding: 2px var(--s2);
   cursor: pointer;
   white-space: nowrap;
 }
+
 .icon-btn:hover {
   background: var(--rail-bg);
 }
+
 .icon-btn.copied {
   background: var(--accent-soft);
   color: var(--accent-hover);
   border-color: var(--accent);
 }
+
 .tag-chip {
   display: inline-block;
   font-size: 12px;
@@ -369,11 +482,19 @@ a:focus-visible {
   border-radius: 12px;
   margin-right: var(--s1);
 }
+
 .detail-actions {
   margin-top: var(--s4);
   display: flex;
   gap: var(--s2);
 }
+
+.detail-actions .btn-secondary,
+.detail-actions .btn-danger {
+  padding: 3px var(--s2);
+  font-size: 12px;
+}
+
 .btn-danger {
   font: inherit;
   background: none;
@@ -383,6 +504,7 @@ a:focus-visible {
   padding: var(--s2) var(--s3);
   cursor: pointer;
 }
+
 .btn-danger:hover {
   background: #fef2f2;
 }
@@ -409,22 +531,95 @@ a:focus-visible {
   width: 420px;
   max-width: 90vw;
 }
+
 .dialog::backdrop {
   background: rgba(0, 0, 0, 0.35);
 }
+
 .dialog h2 {
   margin-bottom: var(--s3);
 }
+
 #record-form {
   display: flex;
   flex-direction: column;
   gap: var(--s3);
 }
+
+/* ---------- API Standard toggle buttons ---------- */
+.std-toggle-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1);
+}
+
+.std-toggle {
+  font: inherit;
+  font-size: 12px;
+  padding: var(--s1) var(--s2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.std-toggle:hover {
+  background: var(--rail-bg);
+}
+
+.std-toggle[data-active="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+
+/* Detail page standard buttons */
+.detail-std-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1);
+}
+
+.detail-std-btn {
+  font: inherit;
+  font-size: 12px;
+  padding: var(--s1) var(--s2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-faint);
+  cursor: not-allowed;
+  transition: all 0.12s ease;
+}
+
+.detail-std-btn[data-supported="true"] {
+  color: var(--accent-hover);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.detail-std-btn[data-supported="true"]:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.detail-std-btn[data-selected="true"] {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent-hover);
+}
+
 .form-error {
   color: var(--danger);
   font-size: 13px;
   min-height: 18px;
 }
+
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -436,7 +631,83 @@ a:focus-visible {
   .panes {
     grid-template-columns: 160px 1fr;
   }
+
   .detail {
     display: none;
   }
+}
+
+/* ---------- Vault history list (login screen) ---------- */
+.vault-history-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--s2);
+}
+
+.vault-history-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.vault-history-item:hover {
+  background: var(--rail-bg);
+}
+
+.vault-history-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.vault-history-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-history-path {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-history-missing {
+  opacity: 0.6;
+}
+
+.vault-history-gone {
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.vault-history-remove {
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: var(--s1);
+  border-radius: var(--radius);
+}
+
+.vault-history-remove:hover {
+  background: #fef2f2;
+  color: var(--danger);
 }

@@ -17,6 +17,7 @@
 //! instead of silently clobbering their change.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 
 pub const VAULT_SCHEMA_VERSION: u32 = 1;
@@ -27,6 +28,10 @@ pub enum VaultError {
     MissingName,
     #[error("api_key 不能为空")]
     MissingApiKey,
+    #[error("接口规范值无效: {0}")]
+    InvalidApiStandard(String),
+    #[error("官网 URL 超出 2048 字符限制")]
+    WebsiteTooLong,
     #[error("找不到记录: {0}")]
     NotFound(String),
     #[error("vault JSON 解析失败: {0}")]
@@ -40,8 +45,11 @@ pub struct Record {
     pub api_key: String,
     #[serde(default)]
     pub vendor: String,
+    /// Map of api_standard key → endpoint URL. Replaces the old single url/api_standard fields.
     #[serde(default)]
-    pub url: String,
+    pub endpoints: HashMap<String, String>,
+    #[serde(default)]
+    pub website: String,
     #[serde(default)]
     pub note: String,
     #[serde(default)]
@@ -71,13 +79,18 @@ pub struct RecordInput {
     pub api_key: String,
     #[serde(default)]
     pub vendor: String,
+    /// Map of api_standard key → endpoint URL.
     #[serde(default)]
-    pub url: String,
+    pub endpoints: HashMap<String, String>,
+    #[serde(default)]
+    pub website: String,
     #[serde(default)]
     pub note: String,
     #[serde(default)]
     pub tags: Vec<String>,
 }
+
+const VALID_STANDARDS: &[&str] = &["openai-chat", "openai-responses", "anthropic", "gemini"];
 
 fn validate(input: &RecordInput) -> Result<(), VaultError> {
     if input.name.trim().is_empty() {
@@ -85,6 +98,14 @@ fn validate(input: &RecordInput) -> Result<(), VaultError> {
     }
     if input.api_key.trim().is_empty() {
         return Err(VaultError::MissingApiKey);
+    }
+    for key in input.endpoints.keys() {
+        if !VALID_STANDARDS.contains(&key.as_str()) {
+            return Err(VaultError::InvalidApiStandard(key.clone()));
+        }
+    }
+    if input.website.len() > 2048 {
+        return Err(VaultError::WebsiteTooLong);
     }
     Ok(())
 }
@@ -116,7 +137,8 @@ impl Vault {
             name: input.name.trim().to_string(),
             api_key: input.api_key,
             vendor: input.vendor.trim().to_string(),
-            url: input.url.trim().to_string(),
+            endpoints: input.endpoints,
+            website: input.website,
             note: input.note,
             tags: normalize_tags(input.tags),
             created_at: now.clone(),
@@ -136,7 +158,8 @@ impl Vault {
         rec.name = input.name.trim().to_string();
         rec.api_key = input.api_key;
         rec.vendor = input.vendor.trim().to_string();
-        rec.url = input.url.trim().to_string();
+        rec.endpoints = input.endpoints;
+        rec.website = input.website;
         rec.note = input.note;
         rec.tags = normalize_tags(input.tags);
         rec.updated_at = now;
@@ -224,13 +247,15 @@ pub fn backup_existing(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn input(name: &str, key: &str) -> RecordInput {
         RecordInput {
             name: name.into(),
             api_key: key.into(),
             vendor: String::new(),
-            url: String::new(),
+            endpoints: HashMap::new(),
+            website: String::new(),
             note: String::new(),
             tags: vec![],
         }
@@ -268,7 +293,7 @@ mod tests {
         let mut v = Vault::new();
         v.add(input("n", "k"), "t0".into()).unwrap();
         assert_eq!(v.records[0].vendor, "");
-        assert_eq!(v.records[0].url, "");
+        assert!(v.records[0].endpoints.is_empty());
         assert!(v.records[0].tags.is_empty());
     }
 

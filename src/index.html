@@ -1,22 +1,33 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>KeyVault</title>
-    <link rel="stylesheet" href="./styles.css" />
-  </head>
-  <body>
-    <!-- ============ 锁屏 / 首次设置 (T11) ============ -->
-    <section id="lock-screen" class="lock-screen">
-      <div class="lock-card">
-        <h1 class="brand">KeyVault</h1>
-        <p class="lock-sub" id="lock-sub">本地加密的 API 密钥收纳箱</p>
 
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KeyVault</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body>
+  <!-- ============ 锁屏 / 首次设置 (T11) ============ -->
+  <section id="lock-screen" class="lock-screen">
+    <div class="lock-card">
+      <h1 class="brand">KeyVault</h1>
+      <p class="lock-sub" id="lock-sub">本地加密的 API 密钥收纳箱</p>
+
+      <!-- 入口选择: 没有已记住的 vault 时显示 -->
+      <div class="lock-choose" id="lock-choose" hidden>
+        <ul id="vault-history-list" class="vault-history-list"></ul>
+        <button id="open-existing-btn" type="button" class="btn-primary">打开已有 vault</button>
+        <button id="create-new-btn" type="button" class="btn-secondary">新建 vault</button>
+      </div>
+
+      <!-- 解锁 / 创建 表单 -->
+      <div class="lock-form" id="lock-form" hidden>
         <label class="field">
           <span>vault 文件</span>
           <div class="path-row">
-            <input id="vault-path" type="text" placeholder="选择或输入 .vault 文件路径" />
+            <input id="vault-path" type="text" placeholder="选择或输入 .vault 文件路径" autocomplete="off" />
             <button id="browse-btn" type="button" class="btn-secondary">浏览…</button>
           </div>
         </label>
@@ -36,97 +47,141 @@
           ⚠ 主密码无法找回。忘记即永久丢失全部数据，请妥善保管。
         </p>
 
+        <label class="remember-row" id="remember-row">
+          <input id="remember-me" type="checkbox" />
+          <span>记住我，3 天内免密打开（仅本机）</span>
+        </label>
+
         <button id="unlock-btn" type="button" class="btn-primary">解锁</button>
+        <button id="switch-btn" type="button" class="link-btn" hidden>退出登录 / 使用其他 vault</button>
         <p class="lock-error" id="lock-error" role="alert" aria-live="assertive"></p>
       </div>
-    </section>
+    </div>
+  </section>
 
-    <!-- ============ 主界面 — 三栏 (D2) ============ -->
-    <main id="app" class="app" hidden>
-      <!-- 顶栏: 搜索常驻 + 主操作 -->
-      <header class="topbar">
-        <div class="search-wrap">
-          <span class="search-icon" aria-hidden="true">🔍</span>
-          <input
-            id="search"
-            type="search"
-            placeholder="搜索用途 / 厂商 / 备注…"
-            aria-label="搜索"
-          />
+  <!-- ============ 主界面 — 三栏 (D2) ============ -->
+  <main id="app" class="app" hidden>
+    <!-- 顶栏: 搜索常驻 + 主操作 -->
+    <header class="topbar">
+      <div class="search-wrap">
+        <span class="search-icon" aria-hidden="true">🔍</span>
+        <input id="search" type="search" placeholder="搜索用途 / 厂商 / 备注…" aria-label="搜索" />
+      </div>
+      <button id="add-btn" type="button" class="btn-primary">+ 新增</button>
+      <button id="lock-now-btn" type="button" class="btn-secondary" title="锁定">🔒</button>
+    </header>
+
+    <div class="panes">
+      <!-- 左栏: 筛选器 (厂商分组 + 标签) -->
+      <nav class="rail" aria-label="筛选">
+        <button class="rail-all" id="filter-all" data-active="true">
+          全部 <span id="count-all" class="count">0</span>
+        </button>
+        <div class="rail-section">
+          <h2 class="rail-head">厂商</h2>
+          <ul id="vendor-list" class="rail-list"></ul>
         </div>
-        <button id="add-btn" type="button" class="btn-primary">+ 新增</button>
-        <button id="lock-now-btn" type="button" class="btn-secondary" title="锁定">🔒</button>
-      </header>
+        <div class="rail-section">
+          <h2 class="rail-head">标签</h2>
+          <ul id="tag-list" class="rail-list rail-tags"></ul>
+        </div>
+      </nav>
 
-      <div class="panes">
-        <!-- 左栏: 筛选器 (厂商分组 + 标签) -->
-        <nav class="rail" aria-label="筛选">
-          <button class="rail-all" id="filter-all" data-active="true">
-            全部 <span id="count-all" class="count">0</span>
-          </button>
-          <div class="rail-section">
-            <h2 class="rail-head">厂商</h2>
-            <ul id="vendor-list" class="rail-list"></ul>
-          </div>
-          <div class="rail-section">
-            <h2 class="rail-head">标签</h2>
-            <ul id="tag-list" class="rail-list rail-tags"></ul>
-          </div>
-        </nav>
+      <!-- 中列: 记录列表 -->
+      <section class="list-col" aria-label="记录列表">
+        <ul id="record-list" class="record-list"></ul>
+        <div id="empty-state" class="empty-state" hidden></div>
+      </section>
 
-        <!-- 中列: 记录列表 -->
-        <section class="list-col" aria-label="记录列表">
-          <ul id="record-list" class="record-list"></ul>
-          <div id="empty-state" class="empty-state" hidden></div>
-        </section>
+      <!-- 右栏: 详情面板 -->
+      <section class="detail" id="detail" aria-label="详情">
+        <div class="detail-placeholder" id="detail-placeholder">从左侧选择一条记录</div>
+        <div id="detail-content" hidden></div>
+      </section>
+    </div>
 
-        <!-- 右栏: 详情面板 -->
-        <section class="detail" id="detail" aria-label="详情">
-          <div class="detail-placeholder" id="detail-placeholder">从左侧选择一条记录</div>
-          <div id="detail-content" hidden></div>
-        </section>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </main>
+
+  <!-- ============ 新增 / 编辑 表单 (模态) ============ -->
+  <dialog id="record-dialog" class="dialog">
+    <form id="record-form" method="dialog">
+      <h2 id="dialog-title">新增密钥</h2>
+
+      <!-- 1. Vendor selector (dropdown) -->
+      <label class="field">
+        <span>厂商</span>
+        <select id="f-vendor">
+          <option value="">自定义</option>
+          <option value="OpenAI">OpenAI</option>
+          <option value="Anthropic">Anthropic</option>
+          <option value="Google">Google</option>
+          <option value="DeepSeek">DeepSeek</option>
+          <option value="Moonshot">Moonshot</option>
+          <option value="Zhipu">Zhipu</option>
+          <option value="Baichuan">Baichuan</option>
+          <option value="Minimax">Minimax</option>
+          <option value="01.AI">01.AI</option>
+          <option value="xAI">xAI</option>
+        </select>
+      </label>
+
+      <!-- 2. Usage name (required) -->
+      <label class="field">
+        <span>用途名称 <em class="req">*</em></span>
+        <input id="f-name" type="text" required autocomplete="off" />
+      </label>
+
+      <!-- 3. API key (required) -->
+      <label class="field">
+        <span>api_key <em class="req">*</em></span>
+        <input id="f-key" type="text" required autocomplete="off" />
+      </label>
+
+      <!-- 4. API standards (multi-select toggle buttons) -->
+      <div class="field">
+        <span>支持的接口规范</span>
+        <div class="std-toggle-group" id="f-standards-group">
+          <button type="button" class="std-toggle" data-std="openai-chat">OpenAI Chat</button>
+          <button type="button" class="std-toggle" data-std="openai-responses">OpenAI Responses</button>
+          <button type="button" class="std-toggle" data-std="anthropic">Anthropic</button>
+          <button type="button" class="std-toggle" data-std="gemini">Gemini</button>
+        </div>
       </div>
 
-      <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-    </main>
+      <!-- 5. Endpoint URL (shows for currently focused standard) -->
+      <label class="field" id="f-url-field">
+        <span id="f-url-label">端点 URL</span>
+        <input id="f-url" type="text" autocomplete="off" />
+      </label>
 
-    <!-- ============ 新增 / 编辑 表单 (模态) ============ -->
-    <dialog id="record-dialog" class="dialog">
-      <form id="record-form" method="dialog">
-        <h2 id="dialog-title">新增密钥</h2>
-        <label class="field">
-          <span>用途名称 <em class="req">*</em></span>
-          <input id="f-name" type="text" required />
-        </label>
-        <label class="field">
-          <span>api_key <em class="req">*</em></span>
-          <input id="f-key" type="text" required />
-        </label>
-        <label class="field">
-          <span>厂商</span>
-          <input id="f-vendor" type="text" list="vendor-options" />
-          <datalist id="vendor-options"></datalist>
-        </label>
-        <label class="field">
-          <span>url</span>
-          <input id="f-url" type="text" />
-        </label>
-        <label class="field">
-          <span>标签（逗号分隔）</span>
-          <input id="f-tags" type="text" placeholder="翻译, 项目A" />
-        </label>
-        <label class="field">
-          <span>备注</span>
-          <textarea id="f-note" rows="2"></textarea>
-        </label>
-        <p class="form-error" id="form-error" role="alert"></p>
-        <div class="dialog-actions">
-          <button type="button" id="form-cancel" class="btn-secondary">取消</button>
-          <button type="submit" id="form-save" class="btn-primary">保存</button>
-        </div>
-      </form>
-    </dialog>
+      <!-- 6. Website -->
+      <label class="field">
+        <span>官网</span>
+        <input id="f-website" type="text" autocomplete="off" maxlength="2048" />
+      </label>
 
-    <script type="module" src="./main.js"></script>
-  </body>
+      <!-- 6. Tags -->
+      <label class="field">
+        <span>标签（逗号分隔）</span>
+        <input id="f-tags" type="text" autocomplete="off" placeholder="翻译, 项目A" />
+      </label>
+
+      <!-- 7. Note -->
+      <label class="field">
+        <span>备注</span>
+        <textarea id="f-note" rows="2" autocomplete="off"></textarea>
+      </label>
+
+      <p class="form-error" id="form-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button type="button" id="form-cancel" class="btn-secondary">取消</button>
+        <button type="submit" id="form-save" class="btn-primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="./main.js"></script>
+</body>
+
 </html>
