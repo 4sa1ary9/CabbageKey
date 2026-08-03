@@ -16,6 +16,7 @@
       <p class="lock-sub" id="vault-hint">本地、无密码的 API key 收纳工具</p>
 
       <div class="lock-choose">
+        <ul id="vault-history-list" class="vault-history-list"></ul>
         <button id="open-existing-btn" type="button" class="btn-primary">打开已有 vault</button>
         <button id="create-new-btn" type="button" class="btn-secondary">新建 vault</button>
       </div>
@@ -33,6 +34,7 @@
         <input id="search" type="search" placeholder="搜索用途 / 厂商 / 备注…" aria-label="搜索" />
       </div>
       <button id="add-btn" type="button" class="btn-primary">+ 新增</button>
+      <button id="switch-vault-btn" type="button" class="btn-secondary" title="关闭当前 vault，返回选择页">切换 vault</button>
     </header>
 
     <div class="panes">

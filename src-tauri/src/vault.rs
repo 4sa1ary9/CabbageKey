@@ -69,6 +69,30 @@ fn default_schema_version() -> u32 {
     VAULT_SCHEMA_VERSION
 }
 
+/// One entry in the recent-vault history list (shown on the chooser page).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct VaultHistoryEntry {
+    pub path: String,
+    /// Display name (filename without directory) for quick recognition.
+    pub display_name: String,
+}
+
+/// Add or promote a vault path to the front of the history list.
+/// Deduplicates by path, caps at 10 entries, newest first.
+pub fn add_vault_history_entry(history: &mut Vec<VaultHistoryEntry>, path: &str) {
+    // Remove existing entry with the same path (dedup).
+    history.retain(|e| e.path != path);
+    // Derive display name from the path (filename only).
+    let display_name = std::path::Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string());
+    // Insert at front (newest first).
+    history.insert(0, VaultHistoryEntry { path: path.to_string(), display_name });
+    // Cap at 10.
+    history.truncate(10);
+}
+
 /// Input for create/update. Validation lives here so both paths share it.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RecordInput {
@@ -433,5 +457,38 @@ mod tests {
 }"#
             .as_bytes()
         );
+    }
+
+    #[test]
+    fn history_newest_first_and_dedup_by_path() {
+        let mut h = Vec::new();
+        add_vault_history_entry(&mut h, "C:\\a\\one.json");
+        add_vault_history_entry(&mut h, "C:\\b\\two.json");
+        // Reopen one.json — must move to front, not duplicate.
+        add_vault_history_entry(&mut h, "C:\\a\\one.json");
+        assert_eq!(h.len(), 2);
+        assert_eq!(h[0].path, "C:\\a\\one.json");
+        assert_eq!(h[1].path, "C:\\b\\two.json");
+    }
+
+    #[test]
+    fn history_capped_at_ten_newest_first() {
+        let mut h = Vec::new();
+        for i in 0..12 {
+            add_vault_history_entry(&mut h, &format!("C:\\dir\\vault-{i:02}.json"));
+        }
+        assert_eq!(h.len(), 10);
+        assert_eq!(h[0].path, "C:\\dir\\vault-11.json");
+        assert_eq!(h[9].path, "C:\\dir\\vault-02.json");
+    }
+
+    #[test]
+    fn history_display_name_is_filename_or_path_fallback() {
+        let mut h = Vec::new();
+        add_vault_history_entry(&mut h, "C:\\my stuff\\keys.json");
+        add_vault_history_entry(&mut h, "C:\\");
+        // Newest first: the root path is at the front.
+        assert_eq!(h[0].display_name, "C:\\");
+        assert_eq!(h[1].display_name, "keys.json");
     }
 }

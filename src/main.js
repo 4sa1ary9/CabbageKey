@@ -6,6 +6,7 @@ import { writeText, clear as clearClipboard } from "@tauri-apps/plugin-clipboard
 import { open as openDialog, save as saveDialog, message } from "@tauri-apps/plugin-dialog";
 import { filterRecords, groupByVendor, emptyStateKind } from "./filter.js";
 import { getPreset, getEndpointUrl, normalizeUrl, getStandardLabel, ALL_STANDARDS } from "./vendorPresets.js";
+import { annotateHistoryEntries } from "./history.js";
 
 const CLIPBOARD_CLEAR_SECONDS = 30; // auto-clear window after copy
 
@@ -49,12 +50,66 @@ async function createVault(path) {
 function showVaultScreen() {
   $("vault-screen").hidden = false;
   $("app").hidden = true;
+  renderVaultHistory();
+}
+
+// Refresh the recent-history list on the chooser page. Called whenever the
+// screen is shown — history always reflects the latest open/create/remove.
+async function renderVaultHistory() {
+  const ul = $("vault-history-list");
+  let entries = [];
+  try {
+    entries = await invoke("get_vault_history");
+  } catch (_) {
+    // No history available — leave the list empty.
+  }
+  if (!entries.length) {
+    ul.innerHTML = "";
+    return;
+  }
+  // Check file existence for each entry in parallel (drives the 置灰 state).
+  const existsList = await Promise.all(
+    entries.map((e) => invoke("vault_exists", { path: e.path }).catch(() => false))
+  );
+  ul.innerHTML = annotateHistoryEntries(entries, existsList)
+    .map((entry) => {
+      const missingClass = entry.exists ? "" : " vault-history-missing";
+      const missingLabel = entry.exists ? "" : '<span class="vault-history-gone">文件不存在</span>';
+      return `<li class="vault-history-item${missingClass}" data-path="${escapeHtml(entry.path)}">
+        <div class="vault-history-info">
+          <span class="vault-history-name">${escapeHtml(entry.display_name)}</span>
+          <span class="vault-history-path">${escapeHtml(entry.path)}</span>
+          ${missingLabel}
+        </div>
+        <button type="button" class="vault-history-remove" data-remove-path="${escapeHtml(entry.path)}" title="从历史移除">×</button>
+      </li>`;
+    })
+    .join("");
 }
 
 function enterApp() {
   $("vault-screen").hidden = true;
   $("app").hidden = false;
   $("search").focus();
+}
+
+// "切换 vault" from the main UI: close the current vault and return to the
+// chooser, where another vault can be opened or created — still no password.
+async function onSwitchVault() {
+  try {
+    await invoke("close_vault");
+  } catch (_) { }
+  state.records = [];
+  state.vendors = [];
+  state.tags = [];
+  state.query = "";
+  state.vendor = null;
+  state.tag = null;
+  state.selectedId = null;
+  state.editingId = null;
+  $("search").value = "";
+  $("vault-error").textContent = "";
+  showVaultScreen();
 }
 
 async function onOpenExisting() {
@@ -530,6 +585,22 @@ async function onDelete(rec) {
 function wireEvents() {
   $("open-existing-btn").addEventListener("click", onOpenExisting);
   $("create-new-btn").addEventListener("click", onCreateNew);
+  $("switch-vault-btn").addEventListener("click", onSwitchVault);
+
+  // History list: click an entry to open it, click × to remove it.
+  $("vault-history-list").addEventListener("click", async (e) => {
+    const removeBtn = e.target.closest("[data-remove-path]");
+    if (removeBtn) {
+      e.stopPropagation();
+      try {
+        await invoke("remove_vault_history", { path: removeBtn.dataset.removePath });
+      } catch (_) { }
+      renderVaultHistory();
+      return;
+    }
+    const item = e.target.closest("[data-path]");
+    if (item) openVault(item.dataset.path);
+  });
 
   $("add-btn").addEventListener("click", () => openForm(null));
   $("search").addEventListener("input", (e) => {

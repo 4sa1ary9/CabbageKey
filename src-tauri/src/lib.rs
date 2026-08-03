@@ -12,16 +12,9 @@ pub mod vault;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::Manager;
-use vault::{Record, RecordInput, Vault};
+use vault::{add_vault_history_entry, Record, RecordInput, Vault, VaultHistoryEntry};
 
 /// Local, non-synced app config (last used vault + recent history).
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-struct VaultHistoryEntry {
-    path: String,
-    /// Display name (filename without directory) for quick recognition.
-    display_name: String,
-}
-
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct Config {
     /// Last vault path, opened automatically on next launch.
@@ -49,22 +42,6 @@ fn save_config(app: &tauri::AppHandle, cfg: &Config) -> Result<(), String> {
     let p = config_path(app)?;
     let json = serde_json::to_vec_pretty(cfg).map_err(|e| e.to_string())?;
     std::fs::write(p, json).map_err(|e| e.to_string())
-}
-
-/// Add or promote a vault path to the front of the history list.
-/// Deduplicates by path, caps at 10 entries, newest first.
-fn add_vault_history_entry(history: &mut Vec<VaultHistoryEntry>, path: &str) {
-    // Remove existing entry with the same path (dedup).
-    history.retain(|e| e.path != path);
-    // Derive display name from the path (filename only).
-    let display_name = std::path::Path::new(path)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string());
-    // Insert at front (newest first).
-    history.insert(0, VaultHistoryEntry { path: path.to_string(), display_name });
-    // Cap at 10.
-    history.truncate(10);
 }
 
 /// Record this path as "last used" and promote it in the history list.
@@ -256,11 +233,16 @@ fn get_vault_history(app: tauri::AppHandle) -> Vec<VaultHistoryEntry> {
     load_config(&app).vault_history
 }
 
-/// Remove one entry from the vault history by path.
+/// Remove one entry from the vault history by path. If the removed entry is
+/// also the last-used vault, forget it too — otherwise the next launch's
+/// auto-open would re-add it to the history.
 #[tauri::command]
 fn remove_vault_history(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let mut cfg = load_config(&app);
     cfg.vault_history.retain(|e| e.path != path);
+    if cfg.last_path.as_deref() == Some(path.as_str()) {
+        cfg.last_path = None;
+    }
     save_config(&app, &cfg)
 }
 
