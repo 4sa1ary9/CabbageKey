@@ -6,8 +6,8 @@
 //! memory only while the app is unlocked. Nothing is written to disk
 //! unencrypted except an explicit user-triggered plaintext export (D6).
 
-mod crypto;
-mod vault;
+pub mod crypto;
+pub mod vault;
 
 use crypto::KdfParams;
 use std::path::PathBuf;
