@@ -1,11 +1,21 @@
-// KeyVault frontend controller. Wires the vault chooser + three-pane UI to
-// Tauri commands. Pure retrieval logic lives in filter.js (unit-tested);
-// this file is DOM glue.
+// KeyVault frontend controller — thin DOM shell. Wires the vault chooser +
+// three-pane UI to Tauri commands. Testable business logic lives in
+// filter.js / vendorPresets.js / formState.js / history.js (unit-tested);
+// this file is event wiring + rendering glue.
 import { invoke } from "@tauri-apps/api/core";
 import { writeText, clear as clearClipboard } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openDialog, save as saveDialog, message } from "@tauri-apps/plugin-dialog";
 import { filterRecords, groupByVendor, emptyStateKind } from "./filter.js";
-import { getPreset, getEndpointUrl, normalizeUrl, getStandardLabel, ALL_STANDARDS } from "./vendorPresets.js";
+import { getEndpointUrl, normalizeUrl, getStandardLabel, ALL_STANDARDS } from "./vendorPresets.js";
+import {
+  openRecordFormState,
+  applyVendorPreset,
+  saveActiveUrl,
+  handleStdClick,
+  buildRecordInput,
+  validateRecordInput,
+  getDefaultStandard,
+} from "./formState.js";
 import { annotateHistoryEntries } from "./history.js";
 
 const CLIPBOARD_CLEAR_SECONDS = 30; // auto-clear window after copy
@@ -269,7 +279,7 @@ function renderDetail() {
   const endpoints = rec.endpoints || {};
   const supportedStandards = Object.keys(endpoints);
   // Default selected: first supported standard
-  const defaultStd = supportedStandards[0] || null;
+  const defaultStd = getDefaultStandard(endpoints);
 
   content.innerHTML = `
     <div class="detail-title">${escapeHtml(rec.name)}</div>
@@ -367,56 +377,31 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-// ---------------- Vendor preset auto-fill ----------------
+// ---------------- Form (add / edit) ----------------
+// formState = { endpoints, activeStd } — mutated only by pure functions from
+// formState.js; this section syncs the DOM to it and reads DOM values back.
+let formState = openRecordFormState(null);
 
-/** Handle vendor selector change: auto-fill website and endpoints from preset. */
-function onVendorChange() {
-  const vendorName = $("f-vendor").value;
-  const preset = getPreset(vendorName);
-
-  if (!preset) {
-    // "自定义" selected — clear auto-filled fields
-    $("f-website").value = "";
-    formEndpoints = {};
-    formActiveStd = null;
-    $("f-url").value = "";
-    $("f-url-field").hidden = true;
-    // Reset all toggles
-    $("f-standards-group").querySelectorAll(".std-toggle").forEach((btn) => {
-      btn.dataset.active = "false";
-    });
-    return;
-  }
-
-  // Auto-fill from preset
-  $("f-website").value = preset.website;
-
-  // Set endpoints from preset standards
-  formEndpoints = { ...preset.standards };
-  const group = $("f-standards-group");
-  group.querySelectorAll(".std-toggle").forEach((btn) => {
-    const std = btn.dataset.std;
-    btn.dataset.active = (std in formEndpoints).toString();
+// Toggle button states mirror formState.endpoints (which standards are active).
+function syncStdToggles() {
+  $("f-standards-group").querySelectorAll(".std-toggle").forEach((btn) => {
+    btn.dataset.active = (btn.dataset.std in formState.endpoints).toString();
   });
+}
 
-  // Show first standard's URL
-  const keys = Object.keys(formEndpoints);
-  if (keys.length > 0) {
-    formActiveStd = keys[0];
-    $("f-url").value = formEndpoints[formActiveStd] || "";
-    $("f-url-label").textContent = `端点 URL (${getStandardLabel(formActiveStd)})`;
+// Show the active standard's URL in the input (or hide the URL field).
+function syncUrlField() {
+  const { activeStd } = formState;
+  if (activeStd) {
+    $("f-url").value = formState.endpoints[activeStd] || "";
+    $("f-url-label").textContent = `端点 URL (${getStandardLabel(activeStd)})`;
     $("f-url-field").hidden = false;
   } else {
-    formActiveStd = null;
     $("f-url").value = "";
+    $("f-url-label").textContent = "端点 URL";
     $("f-url-field").hidden = true;
   }
 }
-
-// ---------------- Form (add / edit) ----------------
-// Track selected standards and their URLs in the form
-let formEndpoints = {}; // { "openai-chat": "https://...", ... }
-let formActiveStd = null; // which standard's URL is currently shown in the input
 
 function openForm(rec) {
   state.editingId = rec ? rec.id : null;
@@ -428,130 +413,50 @@ function openForm(rec) {
   $("f-tags").value = rec ? rec.tags.join(", ") : "";
   $("f-note").value = rec ? rec.note : "";
   $("form-error").textContent = "";
-
-  // Initialize endpoints from record or empty
-  formEndpoints = rec && rec.endpoints ? { ...rec.endpoints } : {};
-  formActiveStd = null;
-
-  // Render toggle button states
-  const group = $("f-standards-group");
-  group.querySelectorAll(".std-toggle").forEach((btn) => {
-    const std = btn.dataset.std;
-    const active = std in formEndpoints;
-    btn.dataset.active = active.toString();
-  });
-
-  // Show URL for first active standard, or clear
-  const activeKeys = Object.keys(formEndpoints);
-  if (activeKeys.length > 0) {
-    formActiveStd = activeKeys[0];
-    $("f-url").value = formEndpoints[formActiveStd] || "";
-    $("f-url-label").textContent = `端点 URL (${getStandardLabel(formActiveStd)})`;
-    $("f-url-field").hidden = false;
-  } else {
-    $("f-url").value = "";
-    $("f-url-label").textContent = "端点 URL";
-    $("f-url-field").hidden = true;
-  }
-
+  formState = openRecordFormState(rec);
+  syncStdToggles();
+  syncUrlField();
   $("record-dialog").showModal();
   $("f-name").focus();
 }
 
-/** Handle clicking a standard toggle button in the form */
-function onStdToggleClick(e) {
-  const btn = e.target.closest("[data-std]");
-  if (!btn) return;
-  const std = btn.dataset.std;
-  const wasActive = btn.dataset.active === "true";
-
-  if (wasActive) {
-    // Deactivate: remove from endpoints
-    delete formEndpoints[std];
-    btn.dataset.active = "false";
-
-    // If this was the displayed URL, switch to another or hide
-    if (formActiveStd === std) {
-      const remaining = Object.keys(formEndpoints);
-      if (remaining.length > 0) {
-        formActiveStd = remaining[0];
-        $("f-url").value = formEndpoints[formActiveStd] || "";
-        $("f-url-label").textContent = `端点 URL (${getStandardLabel(formActiveStd)})`;
-      } else {
-        formActiveStd = null;
-        $("f-url").value = "";
-        $("f-url-field").hidden = true;
-      }
-    }
-  } else {
-    // Activate: add to endpoints
-    // Save the current URL before switching
-    if (formActiveStd) {
-      formEndpoints[formActiveStd] = $("f-url").value.trim();
-    }
-    // Auto-fill URL from vendor preset if available
-    const vendorName = $("f-vendor").value;
-    const presetUrl = getEndpointUrl(vendorName, std);
-    formEndpoints[std] = presetUrl;
-    btn.dataset.active = "true";
-
-    // Show this standard's URL
-    formActiveStd = std;
-    $("f-url").value = presetUrl;
-    $("f-url-label").textContent = `端点 URL (${getStandardLabel(std)})`;
-    $("f-url-field").hidden = false;
-  }
+/** Vendor selector change: auto-fill website + standards from the preset. */
+function onVendorChange() {
+  const preset = applyVendorPreset($("f-vendor").value);
+  formState = preset;
+  $("f-website").value = preset.website;
+  syncStdToggles();
+  syncUrlField();
 }
 
-/** When user clicks a different active standard, show its URL */
-function onStdFocusClick(e) {
-  const btn = e.target.closest("[data-std]");
-  if (!btn || btn.dataset.active !== "true") return;
-  const std = btn.dataset.std;
-  if (std === formActiveStd) return; // already showing
-  // Save current
-  if (formActiveStd) {
-    formEndpoints[formActiveStd] = $("f-url").value.trim();
-  }
-  formActiveStd = std;
-  $("f-url").value = formEndpoints[std] || "";
-  $("f-url-label").textContent = `端点 URL (${getStandardLabel(std)})`;
-}
-
-/** Combined handler: toggle if inactive, focus if already active */
+/** Click on a standard: focus it if already active, toggle it if inactive. */
 function onStdGroupClick(e) {
   const btn = e.target.closest("[data-std]");
   if (!btn) return;
-  if (btn.dataset.active === "true" && btn.dataset.std !== formActiveStd) {
-    // Already selected standard, switch URL display to it
-    onStdFocusClick(e);
-  } else {
-    onStdToggleClick(e);
-  }
+  const std = btn.dataset.std;
+  const presetUrl = getEndpointUrl($("f-vendor").value, std);
+  formState = handleStdClick(formState, std, $("f-url").value, presetUrl);
+  syncStdToggles();
+  syncUrlField();
 }
 
 async function onFormSubmit(e) {
   e.preventDefault();
-  // Save current URL input into formEndpoints before submitting
-  if (formActiveStd) {
-    formEndpoints[formActiveStd] = $("f-url").value.trim();
-  }
-  // Clean up empty URLs
-  const endpoints = {};
-  for (const [key, val] of Object.entries(formEndpoints)) {
-    endpoints[key] = val.trim();
-  }
-  const input = {
+  formState = saveActiveUrl(formState, $("f-url").value);
+  const input = buildRecordInput({
     name: $("f-name").value,
-    api_key: $("f-key").value,
+    apiKey: $("f-key").value,
     vendor: $("f-vendor").value,
-    endpoints,
     website: $("f-website").value,
     note: $("f-note").value,
-    tags: $("f-tags").value.split(",").map((t) => t.trim()).filter(Boolean),
-  };
-  if (!input.name.trim()) return ($("form-error").textContent = "用途名称不能为空");
-  if (!input.api_key.trim()) return ($("form-error").textContent = "api_key 不能为空");
+    tagsText: $("f-tags").value,
+    endpoints: formState.endpoints,
+  });
+  const err = validateRecordInput(input);
+  if (err) {
+    $("form-error").textContent = err;
+    return;
+  }
 
   try {
     const cmd = state.editingId ? "update_record" : "add_record";
