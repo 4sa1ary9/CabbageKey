@@ -4,7 +4,7 @@
 //! 断言输出与已知明文 JSON 逐字节一致；并断言主密码错误时给出明确报错、
 //! 不写出任何文件。本测试与迁移脚本一起用完即弃，不进 CI 遗产。
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -26,7 +26,7 @@ fn fast_params() -> KdfParams {
 
 /// 已知内容：两条记录（一条全字段、一条最小字段），时间戳固定。
 fn known_vault() -> Vault {
-    let mut endpoints = HashMap::new();
+    let mut endpoints = BTreeMap::new();
     endpoints.insert(
         "openai-chat".to_string(),
         "https://api.openai.com/v1/chat/completions".to_string(),
@@ -52,7 +52,7 @@ fn known_vault() -> Vault {
         name: "个人用".into(),
         api_key: "sk-zyxw".into(),
         vendor: String::new(),
-        endpoints: HashMap::new(),
+        endpoints: BTreeMap::new(),
         website: String::new(),
         note: String::new(),
         tags: vec![],

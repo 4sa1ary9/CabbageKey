@@ -1,9 +1,8 @@
-//! Vault data model + persistence (D3, T4/T5/T6).
+//! Vault data model + persistence.
 //!
-//! The decrypted vault is a single JSON document held fully in memory. On
-//! save we re-encrypt the whole thing and write atomically (temp file +
-//! rename) so a crash mid-write can't corrupt the live file. Cloud sync
-//! (坚果云/Dropbox) only ever sees one self-contained encrypted blob.
+//! The vault is a single plaintext JSON document held fully in memory. On
+//! save we write the whole thing atomically (temp file + rename) so a crash
+//! mid-write can't corrupt the live file.
 //!
 //! Record schema (design D3 + office-hours premise 2):
 //!   - id:    internal uuid, the real primary key (用途名称 may repeat)
@@ -11,13 +10,10 @@
 //!   - api_key:         REQUIRED
 //!   - vendor / url / note / tags: all OPTIONAL
 //!
-//! Conflict detection (D4): VaultFile remembers the sha256 of the bytes it
-//! loaded. Before overwriting, the caller re-reads the file on disk and
-//! compares — if another device changed it during this edit session, we warn
-//! instead of silently clobbering their change.
+//! Disk format is frozen by the golden test (see `golden_plaintext_format_is_frozen`).
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub const VAULT_SCHEMA_VERSION: u32 = 1;
@@ -45,9 +41,10 @@ pub struct Record {
     pub api_key: String,
     #[serde(default)]
     pub vendor: String,
-    /// Map of api_standard key → endpoint URL. Replaces the old single url/api_standard fields.
+    /// Map of api_standard key → endpoint URL. BTreeMap so serialized key order
+    /// is deterministic (the golden test freezes the exact bytes).
     #[serde(default)]
-    pub endpoints: HashMap<String, String>,
+    pub endpoints: BTreeMap<String, String>,
     #[serde(default)]
     pub website: String,
     #[serde(default)]
@@ -81,7 +78,7 @@ pub struct RecordInput {
     pub vendor: String,
     /// Map of api_standard key → endpoint URL.
     #[serde(default)]
-    pub endpoints: HashMap<String, String>,
+    pub endpoints: BTreeMap<String, String>,
     #[serde(default)]
     pub website: String,
     #[serde(default)]
@@ -123,7 +120,7 @@ impl Vault {
     }
 
     pub fn to_json(&self) -> Vec<u8> {
-        // pretty so the decrypted export is human-readable (D6 plaintext export)
+        // pretty so the on-disk vault is human-readable
         serde_json::to_vec_pretty(self).expect("vault serializes")
     }
 
@@ -209,25 +206,9 @@ fn normalize_tags(tags: Vec<String>) -> Vec<String> {
     out
 }
 
-/// sha256 of arbitrary bytes (used for conflict detection, D4).
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(bytes);
-    hex_encode(&h.finalize())
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
-}
-
 /// Atomic write: write to `<path>.tmp` then rename over the target. Rename is
 /// atomic on the same filesystem, so a crash leaves either the old file or the
-/// new file — never a half-written one (T4).
+/// new file — never a half-written one.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, bytes)?;
@@ -235,26 +216,17 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Make a `<path>.bak` copy of the current file before overwriting (D6 backup).
-pub fn backup_existing(path: &Path) -> std::io::Result<()> {
-    if path.exists() {
-        let bak = path.with_extension("bak");
-        std::fs::copy(path, bak)?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     fn input(name: &str, key: &str) -> RecordInput {
         RecordInput {
             name: name.into(),
             api_key: key.into(),
             vendor: String::new(),
-            endpoints: HashMap::new(),
+            endpoints: BTreeMap::new(),
             website: String::new(),
             note: String::new(),
             tags: vec![],
@@ -372,9 +344,94 @@ mod tests {
         assert_eq!(back.records, v.records);
     }
 
+    /// 明文格式 golden test：冻结磁盘 JSON 形状（schema_version 1）。
+    /// 双向断言：字面量可解析且字段正确；构造同内容 vault 序列化后与字面量
+    /// 逐字节一致。任何对磁盘格式的意外改动（字段名/顺序/缩进/端点排序）都会红。
     #[test]
-    fn sha256_changes_with_content() {
-        assert_ne!(sha256_hex(b"a"), sha256_hex(b"b"));
-        assert_eq!(sha256_hex(b"a"), sha256_hex(b"a"));
+    fn golden_plaintext_format_is_frozen() {
+        let literal = r#"{
+  "schema_version": 1,
+  "records": [
+    {
+      "id": "9f6e1f2a-0000-4000-8000-000000000001",
+      "name": "翻译用",
+      "api_key": "sk-abcdef1234567890",
+      "vendor": "OpenAI",
+      "endpoints": {
+        "openai-chat": "https://api.openai.com/v1/chat/completions",
+        "openai-responses": "https://api.openai.com/v1/responses"
+      },
+      "website": "https://platform.openai.com",
+      "note": "额度到 2026-12-31",
+      "tags": [
+        "翻译",
+        "项目A"
+      ],
+      "created_at": "2026-08-01T10:00:00Z",
+      "updated_at": "2026-08-02T09:30:00Z"
+    }
+  ]
+}"#
+        .as_bytes();
+
+        // 方向一：字面量 → from_json，解析并断言每个字段。
+        let v = Vault::from_json(literal).unwrap();
+        assert_eq!(v.schema_version, 1);
+        assert_eq!(v.records.len(), 1);
+        let r = &v.records[0];
+        assert_eq!(r.id, "9f6e1f2a-0000-4000-8000-000000000001");
+        assert_eq!(r.name, "翻译用");
+        assert_eq!(r.api_key, "sk-abcdef1234567890");
+        assert_eq!(r.vendor, "OpenAI");
+        assert_eq!(
+            r.endpoints.get("openai-chat").map(String::as_str),
+            Some("https://api.openai.com/v1/chat/completions")
+        );
+        assert_eq!(
+            r.endpoints.get("openai-responses").map(String::as_str),
+            Some("https://api.openai.com/v1/responses")
+        );
+        assert_eq!(r.website, "https://platform.openai.com");
+        assert_eq!(r.note, "额度到 2026-12-31");
+        assert_eq!(r.tags, vec!["翻译", "项目A"]);
+        assert_eq!(r.created_at, "2026-08-01T10:00:00Z");
+        assert_eq!(r.updated_at, "2026-08-02T09:30:00Z");
+
+        // 方向二：构造同内容 vault → to_json，与字面量逐字节一致。
+        let mut endpoints = BTreeMap::new();
+        endpoints.insert(
+            "openai-chat".to_string(),
+            "https://api.openai.com/v1/chat/completions".to_string(),
+        );
+        endpoints.insert(
+            "openai-responses".to_string(),
+            "https://api.openai.com/v1/responses".to_string(),
+        );
+        let built = Vault {
+            schema_version: 1,
+            records: vec![Record {
+                id: "9f6e1f2a-0000-4000-8000-000000000001".into(),
+                name: "翻译用".into(),
+                api_key: "sk-abcdef1234567890".into(),
+                vendor: "OpenAI".into(),
+                endpoints,
+                website: "https://platform.openai.com".into(),
+                note: "额度到 2026-12-31".into(),
+                tags: vec!["翻译".into(), "项目A".into()],
+                created_at: "2026-08-01T10:00:00Z".into(),
+                updated_at: "2026-08-02T09:30:00Z".into(),
+            }],
+        };
+        assert_eq!(built.to_json(), literal);
+
+        // 空库同样冻结。
+        assert_eq!(
+            Vault::new().to_json(),
+            r#"{
+  "schema_version": 1,
+  "records": []
+}"#
+            .as_bytes()
+        );
     }
 }

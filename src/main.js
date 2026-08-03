@@ -1,12 +1,13 @@
-// KeyVault frontend controller. Wires the three-pane UI to Tauri commands.
-// Pure retrieval logic lives in filter.js (unit-tested); this file is DOM glue.
+// KeyVault frontend controller. Wires the vault chooser + three-pane UI to
+// Tauri commands. Pure retrieval logic lives in filter.js (unit-tested);
+// this file is DOM glue.
 import { invoke } from "@tauri-apps/api/core";
 import { writeText, clear as clearClipboard } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openDialog, save as saveDialog, message } from "@tauri-apps/plugin-dialog";
 import { filterRecords, groupByVendor, emptyStateKind } from "./filter.js";
-import { getPreset, getSupportedStandards, getEndpointUrl, normalizeUrl, getStandardLabel, API_STANDARD_LABELS, ALL_STANDARDS } from "./vendorPresets.js";
+import { getPreset, getEndpointUrl, normalizeUrl, getStandardLabel, ALL_STANDARDS } from "./vendorPresets.js";
 
-const CLIPBOARD_CLEAR_SECONDS = 30; // D4: auto-clear window after copy
+const CLIPBOARD_CLEAR_SECONDS = 30; // auto-clear window after copy
 
 // ---- session-ish UI state ----
 const state = {
@@ -18,196 +19,73 @@ const state = {
   tag: null,
   selectedId: null,
   editingId: null,
-  lockMode: "choose", // "choose" | "unlock" | "create"
 };
 
 const $ = (id) => document.getElementById(id);
 
-// ---------------- Lock screen / first run (T11) ----------------
-// Three explicit modes instead of probing whether the file exists — that probe
-// was the P0 bug (first run landed in openDialog and couldn't name a new file).
-async function showChoose() {
-  state.lockMode = "choose";
-  $("lock-choose").hidden = false;
-  $("lock-form").hidden = true;
-  $("lock-sub").textContent = "本地加密的 API 密钥收纳箱";
-  $("lock-error").textContent = "";
-  await renderVaultHistory();
-}
-
-async function renderVaultHistory() {
-  const ul = $("vault-history-list");
-  let entries = [];
-  try {
-    entries = await invoke("get_vault_history");
-  } catch (_) {
-    // No history available — leave list empty
-  }
-
-  if (!entries.length) {
-    ul.innerHTML = "";
-    return;
-  }
-
-  // Check file existence for each entry in parallel
-  const existChecks = await Promise.all(
-    entries.map((e) => invoke("vault_exists", { path: e.path }).catch(() => false))
-  );
-
-  ul.innerHTML = entries
-    .map((entry, i) => {
-      const exists = existChecks[i];
-      const missingClass = exists ? "" : " vault-history-missing";
-      const missingLabel = exists ? "" : `<span class="vault-history-gone">文件不存在</span>`;
-      return `<li class="vault-history-item${missingClass}" data-path="${escapeHtml(entry.path)}">
-        <div class="vault-history-info">
-          <span class="vault-history-name">${escapeHtml(entry.display_name)}</span>
-          <span class="vault-history-path">${escapeHtml(entry.path)}</span>
-          ${missingLabel}
-        </div>
-        <button type="button" class="vault-history-remove" data-remove-path="${escapeHtml(entry.path)}" title="移除">×</button>
-      </li>`;
-    })
-    .join("");
-}
-
-function showUnlock(path) {
-  state.lockMode = "unlock";
-  $("vault-path").value = path || "";
-  $("lock-choose").hidden = true;
-  $("lock-form").hidden = false;
-  $("confirm-field").hidden = true;
-  $("recovery-warn").hidden = true;
-  $("pass-label").textContent = "主密码";
-  $("unlock-btn").textContent = "解锁";
-  $("switch-btn").hidden = false;
-  $("switch-btn").textContent = "退出登录 / 使用其他 vault";
-  $("lock-sub").textContent = "本地加密的 API 密钥收纳箱";
-  $("lock-error").textContent = "";
-  $("master-pass").focus();
-}
-
-function showCreate(path) {
-  state.lockMode = "create";
-  $("vault-path").value = path || "";
-  $("lock-choose").hidden = true;
-  $("lock-form").hidden = false;
-  $("confirm-field").hidden = false;
-  $("recovery-warn").hidden = false;
-  $("pass-label").textContent = "设置主密码";
-  $("unlock-btn").textContent = "创建并解锁";
-  $("switch-btn").hidden = false;
-  $("switch-btn").textContent = "返回";
-  $("lock-sub").textContent = "新建一个加密库 — 选好云盘同步目录里的位置";
-  $("lock-error").textContent = "";
-}
-
-// Decide the startup screen: try passwordless open, else prefill last vault,
-// else show the new/open chooser.
-async function initLock() {
-  try {
-    const info = await invoke("startup_info");
-    if (info.can_auto) {
-      try {
-        applyView(await invoke("auto_unlock"));
-        enterApp();
-        return;
-      } catch (_) {
-        // credential expired / file moved — fall through to manual unlock
-      }
-    }
-    if (info.last_path) showUnlock(info.last_path);
-    else showChoose();
-  } catch (_) {
-    showChoose();
-  }
-}
-
-async function onBrowse() {
-  // Create mode names a new file (saveDialog); unlock mode picks an existing one.
-  const path = state.lockMode === "create"
-    ? await saveDialog({ defaultPath: "vault.vault", filters: [{ name: "Vault", extensions: ["vault"] }] })
-    : await openDialog({ multiple: false, filters: [{ name: "Vault", extensions: ["vault"] }] });
-  if (path) $("vault-path").value = path;
-}
-
-async function onOpenExisting() {
-  showUnlock("");
-  await onBrowse();
-}
-
-async function onCreateNew() {
-  showCreate("");
-  await onBrowse();
-}
-
-function onSwitchClick() {
-  if (state.lockMode === "create") {
-    showChoose();
-    return;
-  }
-  onLogout();
-}
-
-async function onLogout() {
-  await invoke("forget_session");
-  $("master-pass").value = "";
-  $("master-pass-confirm").value = "";
-  $("vault-path").value = "";
-  $("remember-me").checked = false;
-  showChoose();
-}
-
-async function onUnlock() {
-  const path = $("vault-path").value.trim();
-  const pass = $("master-pass").value;
-  const remember = $("remember-me").checked;
-  const err = $("lock-error");
+// ---------------- Vault chooser (open existing / new, no password) ----------------
+async function openVault(path) {
+  const err = $("vault-error");
   err.textContent = "";
-
-  if (!path) return (err.textContent = "请先选择 vault 文件位置");
-  if (!pass) return (err.textContent = "请输入主密码");
-
   try {
-    let view;
-    if (state.lockMode === "create") {
-      if (pass !== $("master-pass-confirm").value) {
-        return (err.textContent = "两次输入的主密码不一致");
-      }
-      view = await invoke("create_vault", { path, passphrase: pass, remember });
-    } else {
-      view = await invoke("unlock_vault", { path, passphrase: pass, remember });
-    }
-    applyView(view);
+    applyView(await invoke("open_vault", { path }));
     enterApp();
   } catch (e) {
-    // Wrong password / tamper / read failure all surface here, clearly (T11).
     err.textContent = String(e);
-    $("master-pass").value = "";
-    $("master-pass").focus();
   }
+}
+
+async function createVault(path) {
+  const err = $("vault-error");
+  err.textContent = "";
+  try {
+    applyView(await invoke("create_vault", { path }));
+    enterApp();
+  } catch (e) {
+    err.textContent = String(e);
+  }
+}
+
+function showVaultScreen() {
+  $("vault-screen").hidden = false;
+  $("app").hidden = true;
 }
 
 function enterApp() {
-  $("lock-screen").hidden = true;
+  $("vault-screen").hidden = true;
   $("app").hidden = false;
   $("search").focus();
 }
 
-async function onLockNow() {
-  await invoke("lock_vault");
-  state.records = [];
-  state.selectedId = null;
-  $("master-pass").value = "";
-  $("app").hidden = true;
-  $("lock-screen").hidden = false;
-  // Back to a single-password unlock for the same vault (no auto-reopen).
-  const path = $("vault-path").value.trim();
-  if (path) showUnlock(path);
-  else showChoose();
+async function onOpenExisting() {
+  const path = await openDialog({ multiple: false, filters: [{ name: "Vault JSON", extensions: ["json"] }] });
+  if (path) openVault(path);
 }
 
-// ---------------- Copy with clear-countdown (D4) ----------------
+async function onCreateNew() {
+  const path = await saveDialog({ defaultPath: "vault.json", filters: [{ name: "Vault JSON", extensions: ["json"] }] });
+  if (path) createVault(path);
+}
+
+// Startup: open the last-used vault directly, else show the chooser.
+// If the remembered file is gone, show the chooser with a hint.
+async function initVaultScreen() {
+  try {
+    const info = await invoke("startup_info");
+    if (info.last_path) {
+      if (await invoke("vault_exists", { path: info.last_path })) {
+        openVault(info.last_path);
+        return;
+      }
+      $("vault-hint").textContent = "上次使用的 vault 文件不存在，请重新打开或新建";
+    }
+  } catch (_) {
+    // startup_info failed — fall through to the chooser
+  }
+  showVaultScreen();
+}
+
+// ---------------- Copy with clear-countdown ----------------
 let clearTimer = null;
 async function copyValue(label, value) {
   await writeText(value);
@@ -534,10 +412,6 @@ function onStdToggleClick(e) {
 
   if (wasActive) {
     // Deactivate: remove from endpoints
-    // First save current URL if this was the active one
-    if (formActiveStd === std) {
-      // Don't save — we're removing it
-    }
     delete formEndpoints[std];
     btn.dataset.active = "false";
 
@@ -626,33 +500,12 @@ async function onFormSubmit(e) {
 
   try {
     const cmd = state.editingId ? "update_record" : "add_record";
-    const args = state.editingId
-      ? { id: state.editingId, input, force: false }
-      : { input, force: false };
-    const view = await saveWithConflictGuard(cmd, args);
-    if (view) {
-      applyView(view);
-      $("record-dialog").close();
-    }
+    const args = state.editingId ? { id: state.editingId, input } : { input };
+    const view = await invoke(cmd, args);
+    applyView(view);
+    $("record-dialog").close();
   } catch (e) {
     $("form-error").textContent = String(e);
-  }
-}
-
-// D4: if the backend reports CONFLICT, ask the user before forcing.
-async function saveWithConflictGuard(cmd, args) {
-  try {
-    return await invoke(cmd, args);
-  } catch (e) {
-    if (String(e).includes("CONFLICT")) {
-      const ok = await message(
-        "另一台设备在你编辑期间修改了这个 vault。继续保存会覆盖对方的改动。是否覆盖？",
-        { title: "检测到冲突", kind: "warning", okLabel: "覆盖保存", cancelLabel: "取消" }
-      );
-      if (ok) return await invoke(cmd, { ...args, force: true });
-      return null;
-    }
-    throw e;
   }
 }
 
@@ -664,23 +517,12 @@ async function onDelete(rec) {
     cancelLabel: "取消",
   });
   if (!ok) return;
-  const view = await saveWithConflictGuard("delete_record", { id: rec.id, force: false });
-  if (view) {
+  try {
+    const view = await invoke("delete_record", { id: rec.id });
     if (state.selectedId === rec.id) state.selectedId = null;
     applyView(view);
-  }
-}
-
-async function onExport() {
-  const ok = await message(
-    "导出会把所有密钥以明文 JSON 写入磁盘，任何人都能读取。仅用于备份，请妥善保管导出文件。确定继续？",
-    { title: "明文导出（高风险）", kind: "warning", okLabel: "我了解，继续", cancelLabel: "取消" }
-  );
-  if (!ok) return;
-  const dest = await saveDialog({ defaultPath: "keyvault-export.json" });
-  if (dest) {
-    await invoke("export_plaintext", { dest });
-    showToast("已导出明文备份");
+  } catch (e) {
+    showToast(String(e));
   }
 }
 
@@ -688,32 +530,8 @@ async function onExport() {
 function wireEvents() {
   $("open-existing-btn").addEventListener("click", onOpenExisting);
   $("create-new-btn").addEventListener("click", onCreateNew);
-  $("switch-btn").addEventListener("click", onSwitchClick);
-  $("browse-btn").addEventListener("click", onBrowse);
-  $("unlock-btn").addEventListener("click", onUnlock);
-  $("master-pass").addEventListener("keydown", (e) => e.key === "Enter" && onUnlock());
-  $("master-pass-confirm").addEventListener("keydown", (e) => e.key === "Enter" && onUnlock());
-
-  // Vault history list: click entry to open, click × to remove
-  $("vault-history-list").addEventListener("click", async (e) => {
-    const removeBtn = e.target.closest("[data-remove-path]");
-    if (removeBtn) {
-      e.stopPropagation();
-      const path = removeBtn.dataset.removePath;
-      try {
-        await invoke("remove_vault_history", { path });
-      } catch (_) { }
-      await renderVaultHistory();
-      return;
-    }
-    const item = e.target.closest("[data-path]");
-    if (item) {
-      showUnlock(item.dataset.path);
-    }
-  });
 
   $("add-btn").addEventListener("click", () => openForm(null));
-  $("lock-now-btn").addEventListener("click", onLockNow);
   $("search").addEventListener("input", (e) => {
     state.query = e.target.value;
     renderList();
@@ -781,5 +599,4 @@ function wireEvents() {
 }
 
 wireEvents();
-initLock();
-
+initVaultScreen();

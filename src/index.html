@@ -9,53 +9,18 @@
 </head>
 
 <body>
-  <!-- ============ 锁屏 / 首次设置 (T11) ============ -->
-  <section id="lock-screen" class="lock-screen">
+  <!-- ============ vault 选择页（打开已有 / 新建，无密码） ============ -->
+  <section id="vault-screen" class="lock-screen">
     <div class="lock-card">
       <h1 class="brand">KeyVault</h1>
-      <p class="lock-sub" id="lock-sub">本地加密的 API 密钥收纳箱</p>
+      <p class="lock-sub" id="vault-hint">本地、无密码的 API key 收纳工具</p>
 
-      <!-- 入口选择: 没有已记住的 vault 时显示 -->
-      <div class="lock-choose" id="lock-choose" hidden>
-        <ul id="vault-history-list" class="vault-history-list"></ul>
+      <div class="lock-choose">
         <button id="open-existing-btn" type="button" class="btn-primary">打开已有 vault</button>
         <button id="create-new-btn" type="button" class="btn-secondary">新建 vault</button>
       </div>
 
-      <!-- 解锁 / 创建 表单 -->
-      <div class="lock-form" id="lock-form" hidden>
-        <label class="field">
-          <span>vault 文件</span>
-          <div class="path-row">
-            <input id="vault-path" type="text" placeholder="选择或输入 .vault 文件路径" autocomplete="off" />
-            <button id="browse-btn" type="button" class="btn-secondary">浏览…</button>
-          </div>
-        </label>
-
-        <label class="field">
-          <span id="pass-label">主密码</span>
-          <input id="master-pass" type="password" autocomplete="off" />
-        </label>
-
-        <!-- 仅首次创建时显示 -->
-        <label class="field" id="confirm-field" hidden>
-          <span>确认主密码</span>
-          <input id="master-pass-confirm" type="password" autocomplete="off" />
-        </label>
-
-        <p class="lock-warn" id="recovery-warn" hidden>
-          ⚠ 主密码无法找回。忘记即永久丢失全部数据，请妥善保管。
-        </p>
-
-        <label class="remember-row" id="remember-row">
-          <input id="remember-me" type="checkbox" />
-          <span>记住我，3 天内免密打开（仅本机）</span>
-        </label>
-
-        <button id="unlock-btn" type="button" class="btn-primary">解锁</button>
-        <button id="switch-btn" type="button" class="link-btn" hidden>退出登录 / 使用其他 vault</button>
-        <p class="lock-error" id="lock-error" role="alert" aria-live="assertive"></p>
-      </div>
+      <p class="lock-error" id="vault-error" role="alert" aria-live="assertive"></p>
     </div>
   </section>
 
@@ -68,7 +33,6 @@
         <input id="search" type="search" placeholder="搜索用途 / 厂商 / 备注…" aria-label="搜索" />
       </div>
       <button id="add-btn" type="button" class="btn-primary">+ 新增</button>
-      <button id="lock-now-btn" type="button" class="btn-secondary" title="锁定">🔒</button>
     </header>
 
     <div class="panes">
