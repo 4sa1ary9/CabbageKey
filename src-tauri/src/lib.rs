@@ -224,6 +224,23 @@ fn delete_record(state: tauri::State<AppState>, id: String) -> Result<VaultView,
     Ok(view_of(s.vault.as_ref().unwrap()))
 }
 
+/// Apply a new global record order. `ids` must be a permutation of all record
+/// ids; on any invalid id the vault is left untouched and nothing is written.
+#[tauri::command]
+fn reorder_records(
+    state: tauri::State<AppState>,
+    ids: Vec<String>,
+) -> Result<VaultView, String> {
+    let mut s = state.0.lock().unwrap();
+    s.vault
+        .as_mut()
+        .ok_or("没有打开的 vault")?
+        .reorder(&ids)
+        .map_err(|e| e.to_string())?;
+    persist(&s)?;
+    Ok(view_of(s.vault.as_ref().unwrap()))
+}
+
 /// Return the vault history list from config.
 #[tauri::command]
 fn get_vault_history(app: tauri::AppHandle) -> Vec<VaultHistoryEntry> {
@@ -258,6 +275,7 @@ pub fn run() {
             add_record,
             update_record,
             delete_record,
+            reorder_records,
             get_vault_history,
             remove_vault_history,
         ])

@@ -42,7 +42,7 @@
 
 - **D1 技术栈：Tauri 2（Rust 后端 + 系统 WebView）保持不动。** 理由见 ADR-0001：绿场选型中"编译型后端 + 一流生态 + webview UI"本就是最优集合，换栈只买口味差异、付重写代价。
 - **D2 存储：单个明文 JSON vault 文件（schema_version 1）。** 顶层 `schema_version` + `records` 数组；启动整读进内存，改动整写回（原子写 tmp+rename）。**格式自此冻结**，由 golden test 逐字节把守——接替原 KAT"防静默改格式"的角色。
-- **D3 记录 schema：** `id`（uuid 主键，重名按 id 区分）+ 必填 `name`（用途名称）/ `api_key` + 可选 `vendor` / `endpoints`（接口规范 → 端点 URL 映射，BTreeMap 保证序列化键序确定）/ `website` / `note` / `tags`（多值）/ `created_at` / `updated_at`。完整向后兼容旧字段（缺省自动默认）。
+- **D3 记录 schema：** `id`（uuid 主键，重名按 id 区分）+ `order`（列表显示顺序；旧 vault 无此字段时按文件位置兜底补齐，显式值保留）+ 必填 `name`（用途名称）/ `api_key` + 可选 `vendor` / `endpoints`（接口规范 → 端点 URL 映射，BTreeMap 保证序列化键序确定）/ `website` / `note` / `tags`（多值）/ `created_at` / `updated_at`。完整向后兼容旧字段（缺省自动默认）。
 - **D4 启动流程：无密码。** 启动读本机配置（仅 `last_path` + `vault_history`，无任何凭据），上次 vault 存在则直进主界面；不存在或首次启动进选择页（打开已有 / 新建 / 历史列表，失效路径置灰、可单条移除）。主界面内"切换 vault"关闭当前会话回选择页。
 - **D5 会话状态：只有当前 vault + 路径。** 无密码、无凭据、无哈希校验。`open_vault` 读文件解析 JSON 即载入；`create_vault` 写空 vault。
 - **D6 前端：薄 DOM 壳 + 纯逻辑模块。** `main.js` 只做事件绑定与渲染；检索（filter）、厂商预设（vendorPresets）、表单状态机（formState）、历史标注（history）全部为可单测的纯逻辑模块。
@@ -153,7 +153,7 @@
 
 好测试的标准：只测模块边界上的外部行为（输入→输出、可观察的副作用），不测内部实现细节。
 
-- **后端（cargo test，15 个）**：vault 模块 CRUD / 必填校验 / api_standard 验证 / website 长度 / 重名按 id 区分 / 分组标签去重 / JSON round-trip / **明文格式 golden test**（字面量 JSON ↔ 序列化双向逐字节一致，冻结磁盘格式）/ 历史列表（去重、上限、display_name）。
+- **后端（cargo test，26 个）**：vault 模块 CRUD / 必填校验 / api_standard 验证 / website 长度 / 重名按 id 区分 / 分组标签去重 / JSON round-trip / **明文格式 golden test**（字面量 JSON ↔ 序列化双向逐字节一致，冻结磁盘格式）/ 记录顺序（旧 vault 兜底、重排校验、新增排最后、编辑不动顺序）/ 历史列表（去重、上限、display_name）。
 - **前端（vitest，56 个）**：filter（10）/ vendorPresets（17）/ formState（25）/ history（4）——全部纯函数、直接断言返回值。
 - **Tauri 命令层**：不加测试接缝，保持薄壳，逻辑全部下沉到 vault 模块。
 - **不引入 DOM/E2E 自动化测试**：维持项目"纯逻辑单测 + 人工走查"的传统；发布前按 `docs/TEST-PLAN.md` 的人工清单走一遍（直进主界面 → 增 → 搜 → 复制 → 改 → 删 → 文件夹迁移）。

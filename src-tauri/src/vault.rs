@@ -6,6 +6,8 @@
 //!
 //! Record schema (design D3 + office-hours premise 2):
 //!   - id:    internal uuid, the real primary key (用途名称 may repeat)
+//!   - order: display order in the record list; old vaults lack it and get
+//!            their file position as fallback on load (see `normalize_orders`)
 //!   - name:  用途名称  REQUIRED
 //!   - api_key:         REQUIRED
 //!   - vendor / url / note / tags: all OPTIONAL
@@ -30,6 +32,8 @@ pub enum VaultError {
     WebsiteTooLong,
     #[error("找不到记录: {0}")]
     NotFound(String),
+    #[error("重排 id 列表无效: 必须恰好包含全部记录 id 且无重复")]
+    InvalidOrderList,
     #[error("vault JSON 解析失败: {0}")]
     BadJson(String),
 }
@@ -37,6 +41,10 @@ pub enum VaultError {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Record {
     pub id: String,
+    /// Display order in the record list, ascending. Old vaults have no such
+    /// field — `from_json` fills the gap with the record's file position.
+    #[serde(default)]
+    pub order: Option<u32>,
     pub name: String,
     pub api_key: String,
     #[serde(default)]
@@ -140,7 +148,10 @@ impl Vault {
     }
 
     pub fn from_json(bytes: &[u8]) -> Result<Self, VaultError> {
-        serde_json::from_slice(bytes).map_err(|e| VaultError::BadJson(e.to_string()))
+        let mut v: Vault =
+            serde_json::from_slice(bytes).map_err(|e| VaultError::BadJson(e.to_string()))?;
+        v.normalize_orders();
+        Ok(v)
     }
 
     pub fn to_json(&self) -> Vec<u8> {
@@ -150,11 +161,19 @@ impl Vault {
 
     /// Add a record (T5). Validates required fields, assigns a fresh uuid.
     /// Duplicate 用途名称 is allowed — id keeps them distinct.
+    /// The new record is appended last (order = current max + 1).
     pub fn add(&mut self, input: RecordInput, now: String) -> Result<String, VaultError> {
         validate(&input)?;
         let id = uuid::Uuid::new_v4().to_string();
+        let order = self
+            .records
+            .iter()
+            .filter_map(|r| r.order)
+            .max()
+            .map_or(0, |m| m + 1);
         self.records.push(Record {
             id: id.clone(),
+            order: Some(order),
             name: input.name.trim().to_string(),
             api_key: input.api_key,
             vendor: input.vendor.trim().to_string(),
@@ -195,6 +214,40 @@ impl Vault {
             return Err(VaultError::NotFound(id.to_string()));
         }
         Ok(())
+    }
+
+    /// Apply a new global order: `ids` must be a permutation of all record ids.
+    /// On any invalid id (unknown, missing, duplicate) the vault is left
+    /// untouched — the caller must not persist in that case.
+    pub fn reorder(&mut self, ids: &[String]) -> Result<(), VaultError> {
+        let mut incoming: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let mut existing: Vec<&str> = self.records.iter().map(|r| r.id.as_str()).collect();
+        incoming.sort_unstable();
+        existing.sort_unstable();
+        if incoming != existing {
+            return Err(VaultError::InvalidOrderList);
+        }
+        let index_of: BTreeMap<&str, u32> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.as_str(), i as u32))
+            .collect();
+        for r in &mut self.records {
+            r.order = index_of.get(r.id.as_str()).copied();
+        }
+        self.records.sort_by_key(|r| r.order);
+        Ok(())
+    }
+
+    /// Old vaults (and hand-edited files) may lack `order` fields — fill each
+    /// missing slot with the record's file position, keeping explicit values
+    /// intact so reading never destroys data that's already there.
+    fn normalize_orders(&mut self) {
+        for (i, r) in self.records.iter_mut().enumerate() {
+            if r.order.is_none() {
+                r.order = Some(i as u32);
+            }
+        }
     }
 
     /// All distinct vendors (non-empty), sorted — drives the left-rail groups.
@@ -378,6 +431,7 @@ mod tests {
   "records": [
     {
       "id": "9f6e1f2a-0000-4000-8000-000000000001",
+      "order": 0,
       "name": "翻译用",
       "api_key": "sk-abcdef1234567890",
       "vendor": "OpenAI",
@@ -435,6 +489,7 @@ mod tests {
             schema_version: 1,
             records: vec![Record {
                 id: "9f6e1f2a-0000-4000-8000-000000000001".into(),
+                order: Some(0),
                 name: "翻译用".into(),
                 api_key: "sk-abcdef1234567890".into(),
                 vendor: "OpenAI".into(),
@@ -457,6 +512,159 @@ mod tests {
 }"#
             .as_bytes()
         );
+    }
+
+    #[test]
+    fn old_vault_without_order_keeps_file_order() {
+        let literal = r#"{
+  "schema_version": 1,
+  "records": [
+    { "id": "a", "name": "甲", "api_key": "k1" },
+    { "id": "b", "name": "乙", "api_key": "k2" },
+    { "id": "c", "name": "丙", "api_key": "k3" }
+  ]
+}"#
+        .as_bytes();
+        let v = Vault::from_json(literal).unwrap();
+        let names: Vec<&str> = v.records.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["甲", "乙", "丙"]); // 文件内原顺序
+        let orders: Vec<Option<u32>> = v.records.iter().map(|r| r.order).collect();
+        assert_eq!(orders, vec![Some(0), Some(1), Some(2)]); // 兜底归一
+    }
+
+    #[test]
+    fn missing_order_filled_with_position_keeping_explicit_values() {
+        // 手改过的文件：部分记录有 order、部分没有 → 缺失的按文件位置补齐，
+        // 已有的显式值保留（读取不破坏数据）。
+        let literal = r#"{
+  "schema_version": 1,
+  "records": [
+    { "id": "a", "name": "甲", "api_key": "k1", "order": 7 },
+    { "id": "b", "name": "乙", "api_key": "k2" }
+  ]
+}"#
+        .as_bytes();
+        let v = Vault::from_json(literal).unwrap();
+        assert_eq!(v.records[0].order, Some(7));
+        assert_eq!(v.records[1].order, Some(1));
+        let ids: Vec<&str> = v.records.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "b"]); // 文件内原顺序
+    }
+
+    #[test]
+    fn reorder_applies_full_id_list() {
+        let mut v = Vault::new();
+        let a = v.add(input("a", "k1"), "t0".into()).unwrap();
+        let b = v.add(input("b", "k2"), "t0".into()).unwrap();
+        let c = v.add(input("c", "k3"), "t0".into()).unwrap();
+        v.reorder(&[c.clone(), a.clone(), b.clone()]).unwrap();
+        let ids: Vec<&str> = v.records.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec![c.as_str(), a.as_str(), b.as_str()]);
+        let orders: Vec<u32> = v.records.iter().filter_map(|r| r.order).collect();
+        assert_eq!(orders, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn reorder_rejects_unknown_id_without_mutation() {
+        let mut v = Vault::new();
+        let a = v.add(input("a", "k1"), "t0".into()).unwrap();
+        let b = v.add(input("b", "k2"), "t0".into()).unwrap();
+        let err = v.reorder(&[a.clone(), "not-an-id".into()]).unwrap_err();
+        assert!(matches!(err, VaultError::InvalidOrderList));
+        // 不落盘：顺序与 order 字段均未变。
+        let ids: Vec<&str> = v.records.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec![a.as_str(), b.as_str()]);
+        let orders: Vec<Option<u32>> = v.records.iter().map(|r| r.order).collect();
+        assert_eq!(orders, vec![Some(0), Some(1)]);
+    }
+
+    #[test]
+    fn reorder_rejects_partial_list() {
+        let mut v = Vault::new();
+        let a = v.add(input("a", "k1"), "t0".into()).unwrap();
+        v.add(input("b", "k2"), "t0".into()).unwrap();
+        assert!(matches!(
+            v.reorder(&[a]).unwrap_err(),
+            VaultError::InvalidOrderList
+        ));
+    }
+
+    #[test]
+    fn reorder_rejects_duplicates() {
+        let mut v = Vault::new();
+        let a = v.add(input("a", "k1"), "t0".into()).unwrap();
+        let b = v.add(input("b", "k2"), "t0".into()).unwrap();
+        assert!(matches!(
+            v.reorder(&[a.clone(), a.clone()]).unwrap_err(),
+            VaultError::InvalidOrderList
+        ));
+        assert!(matches!(
+            v.reorder(&[a, b.clone(), b]).unwrap_err(),
+            VaultError::InvalidOrderList
+        ));
+    }
+
+    #[test]
+    fn reorder_empty_list_rejected_on_nonempty_vault() {
+        let mut v = Vault::new();
+        v.add(input("a", "k1"), "t0".into()).unwrap();
+        assert!(matches!(
+            v.reorder(&[]).unwrap_err(),
+            VaultError::InvalidOrderList
+        ));
+    }
+
+    #[test]
+    fn add_new_record_goes_last_after_reorder() {
+        let mut v = Vault::new();
+        let a = v.add(input("a", "k1"), "t0".into()).unwrap();
+        let b = v.add(input("b", "k2"), "t0".into()).unwrap();
+        v.reorder(&[b.clone(), a.clone()]).unwrap();
+        let c = v.add(input("c", "k3"), "t1".into()).unwrap();
+        let ids: Vec<&str> = v.records.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec![b.as_str(), a.as_str(), c.as_str()]);
+        assert_eq!(v.records.last().unwrap().order, Some(2));
+    }
+
+    #[test]
+    fn update_keeps_order() {
+        let mut v = Vault::new();
+        let a = v.add(input("a", "k1"), "t0".into()).unwrap();
+        let b = v.add(input("b", "k2"), "t0".into()).unwrap();
+        v.reorder(&[b.clone(), a.clone()]).unwrap();
+        v.update(&a, input("a-renamed", "k9"), "t1".into()).unwrap();
+        let ra = v.records.iter().find(|r| r.id == a).unwrap();
+        assert_eq!(ra.order, Some(1));
+        let ids: Vec<&str> = v.records.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec![b.as_str(), a.as_str()]);
+    }
+
+    #[test]
+    fn delete_keeps_remaining_orders_new_record_gets_max_plus_one() {
+        let mut v = Vault::new();
+        v.add(input("a", "k1"), "t0".into()).unwrap();
+        let b = v.add(input("b", "k2"), "t0".into()).unwrap();
+        v.add(input("c", "k3"), "t0".into()).unwrap();
+        v.delete(&b).unwrap();
+        let orders: Vec<Option<u32>> = v.records.iter().map(|r| r.order).collect();
+        assert_eq!(orders, vec![Some(0), Some(2)]);
+        let d = v.add(input("d", "k4"), "t1".into()).unwrap();
+        assert_eq!(v.records.last().unwrap().id, d);
+        assert_eq!(v.records.last().unwrap().order, Some(3));
+    }
+
+    #[test]
+    fn reordered_roundtrip_preserves_order() {
+        let mut v = Vault::new();
+        let a = v.add(input("a", "k1"), "t0".into()).unwrap();
+        let b = v.add(input("b", "k2"), "t0".into()).unwrap();
+        let c = v.add(input("c", "k3"), "t0".into()).unwrap();
+        v.reorder(&[c.clone(), a.clone(), b.clone()]).unwrap();
+        let bytes = v.to_json();
+        let back = Vault::from_json(&bytes).unwrap();
+        assert_eq!(back.records, v.records);
+        let ids: Vec<&str> = back.records.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec![c.as_str(), a.as_str(), b.as_str()]);
     }
 
     #[test]
