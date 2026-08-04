@@ -65,6 +65,7 @@ export function buildDetailBodyHtml(rec) {
     ${rec.note ? field("备注", escapeHtml(rec.note)) : ""}
     <div class="detail-actions">
       <button class="btn-secondary" id="edit-btn">编辑</button>
+      <button class="btn-secondary" id="duplicate-btn">复制</button>
       <button class="btn-danger" id="delete-btn">删除</button>
     </div>`;
 }

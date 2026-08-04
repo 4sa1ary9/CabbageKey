@@ -77,3 +77,8 @@ export function validateRecordInput(input) {
   if (!String(input.api_key || "").trim()) return "api_key 不能为空";
   return null;
 }
+
+/** Duplicate-entry name: `${name}_copy`. Suffix may repeat — not unique. */
+export function duplicateName(name) {
+  return `${String(name || "")}_copy`;
+}

@@ -69,3 +69,12 @@ describe("api_key masking", () => {
     expect(div.textContent).not.toContain("sk-123");
   });
 });
+
+describe("detail actions", () => {
+  it("renders 编辑 / 复制 / 删除 buttons in that order", () => {
+    const div = document.createElement("div");
+    div.innerHTML = buildDetailBodyHtml(rec);
+    const btns = [...div.querySelectorAll(".detail-actions button")].map((b) => b.textContent);
+    expect(btns).toEqual(["编辑", "复制", "删除"]);
+  });
+});

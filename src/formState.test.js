@@ -8,6 +8,7 @@ import {
   parseTags,
   buildRecordInput,
   validateRecordInput,
+  duplicateName,
 } from "./formState.js";
 
 describe("applyVendorPreset", () => {
@@ -147,5 +148,15 @@ describe("validateRecordInput", () => {
 
   it("accepts a complete input", () => {
     expect(validateRecordInput({ name: "n", api_key: "k" })).toBeNull();
+  });
+});
+
+describe("duplicateName", () => {
+  it("appends _copy to the original name", () => {
+    expect(duplicateName("翻译用")).toBe("翻译用_copy");
+  });
+
+  it("repeats the suffix for repeated copies (not unique)", () => {
+    expect(duplicateName("翻译用_copy")).toBe("翻译用_copy_copy");
   });
 });

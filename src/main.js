@@ -15,6 +15,7 @@ import {
   toggleStandard,
   buildRecordInput,
   validateRecordInput,
+  duplicateName,
 } from "./formState.js";
 import { annotateHistoryEntries } from "./history.js";
 import { escapeHtml } from "./html.js";
@@ -371,6 +372,7 @@ function renderDetail() {
   };
   $("copy-key").onclick = () => withCopied($("copy-key"), () => copyValue("api_key", rec.api_key));
   $("edit-btn").onclick = () => openForm(rec);
+  $("duplicate-btn").onclick = () => openDuplicateForm(rec);
   $("delete-btn").onclick = () => onDelete(rec);
 }
 
@@ -416,26 +418,60 @@ function renderUrlRows() {
     .join("");
 }
 
-function openForm(rec) {
-  state.editingId = rec ? rec.id : null;
-  $("dialog-title").textContent = rec ? "编辑密钥" : "新增密钥";
-  $("f-name").value = rec ? rec.name : "";
-  $("f-key").value = rec ? rec.api_key : "";
-  $("f-vendor").value = rec ? rec.vendor : "";
+// Shared field filling for the add/edit dialog. `fields` may be a record
+// (edit mode) or a plain prefill object (quick add / duplicate); missing
+// keys become empty values.
+function fillFormFields(fields) {
+  $("f-name").value = fields.name || "";
+  $("f-key").value = fields.api_key || "";
+  $("f-vendor").value = fields.vendor || "";
   vendorDd.highlighted = -1;
-  vendorDd.applied = rec ? rec.vendor || "" : "";
+  vendorDd.applied = fields.vendor || "";
   closeVendorPanel();
-  $("f-website").value = rec ? (rec.website || "") : "";
-  $("f-tags").value = rec ? rec.tags.join(", ") : "";
-  $("f-note").value = rec ? rec.note : "";
+  $("f-website").value = fields.website || "";
+  $("f-tags").value = (fields.tags || []).join(", ");
+  $("f-note").value = fields.note || "";
   $("form-error").textContent = "";
-  // Backfill preset URLs for standards the record is missing (never overwrites).
-  const st = openRecordFormState(rec);
-  formState = { endpoints: backfillPresetEndpoints(st.endpoints, rec ? rec.vendor : "") };
+}
+
+// Sync toggles + URL rows, then open the dialog and focus the name field.
+function showRecordDialog() {
   syncStdToggles();
   renderUrlRows();
   $("record-dialog").showModal();
   $("f-name").focus();
+}
+
+function openForm(rec) {
+  state.editingId = rec ? rec.id : null;
+  $("dialog-title").textContent = rec ? "编辑密钥" : "新增密钥";
+  fillFormFields(rec || {});
+  // Backfill preset URLs for standards the record is missing (never overwrites).
+  const st = openRecordFormState(rec);
+  formState = { endpoints: backfillPresetEndpoints(st.endpoints, rec ? rec.vendor : "") };
+  showRecordDialog();
+}
+
+// Quick add with the rail's vendor filter pre-applied: preset vendors get
+// their website + endpoint URLs, custom vendors just the name — the same
+// auto-fill rule as typing the vendor into the form manually.
+function openAddWithVendor(vendor) {
+  state.editingId = null;
+  $("dialog-title").textContent = "新增密钥";
+  formState = applyVendorPreset(vendor);
+  fillFormFields({ vendor, website: formState.website });
+  showRecordDialog();
+}
+
+// Duplicate add: every field copied from the source record with the name
+// suffixed "_copy". No preset backfill — the copy mirrors the record's
+// endpoint URLs exactly, and the suffix may repeat across copies.
+function openDuplicateForm(rec) {
+  state.editingId = null;
+  $("dialog-title").textContent = "新增密钥";
+  fillFormFields({ ...rec, name: duplicateName(rec.name) });
+  formState = openRecordFormState(rec);
+  showRecordDialog();
 }
 
 /** Vendor input change: full-replace website + standards from the preset. */
@@ -632,7 +668,12 @@ function wireEvents() {
     if (item) openVault(item.dataset.path);
   });
 
-  $("add-btn").addEventListener("click", () => openForm(null));
+  // "+ 新增": with a vendor filter active, open the form with that vendor
+  // pre-applied (preset auto-fill included); otherwise a plain empty form.
+  $("add-btn").addEventListener("click", () => {
+    if (state.vendor) openAddWithVendor(state.vendor);
+    else openForm(null);
+  });
   $("search").addEventListener("input", (e) => {
     state.query = e.target.value;
     renderList();
