@@ -5,6 +5,7 @@ import {
     getSupportedStandards,
     getEndpointUrl,
     normalizeUrl,
+    getStandardLabel,
 } from "./vendorPresets.js";
 
 describe("VENDOR_PRESETS", () => {
@@ -99,5 +100,18 @@ describe("normalizeUrl", () => {
     it("returns empty for null/undefined", () => {
         expect(normalizeUrl(null)).toBe("");
         expect(normalizeUrl(undefined)).toBe("");
+    });
+});
+
+describe("getStandardLabel", () => {
+    it("uses short names matching the toggle buttons in the form", () => {
+        expect(getStandardLabel("openai-chat")).toBe("OpenAI Chat");
+        expect(getStandardLabel("openai-responses")).toBe("OpenAI Responses");
+        expect(getStandardLabel("anthropic")).toBe("Anthropic");
+        expect(getStandardLabel("gemini")).toBe("Gemini");
+    });
+
+    it("falls back to the raw key for unknown standards", () => {
+        expect(getStandardLabel("nope")).toBe("nope");
     });
 });

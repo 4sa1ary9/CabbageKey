@@ -1,17 +1,17 @@
 // Built-in AI vendor presets for auto-fill.
 // Each entry: { name, website, standards: { key → endpoint URL }, defaultStandard }
 //
-// Standard keys:
-//   "openai-chat"      — OpenAI Chat Completions (/v1/chat/completions)
-//   "openai-responses" — OpenAI Responses API (/v1/responses)
-//   "anthropic"        — Anthropic Messages (/v1/messages)
-//   "gemini"           — Gemini Native generateContent
+// Standard keys (UI labels are the short names below — see API_STANDARD_LABELS):
+//   "openai-chat"      — OpenAI Chat (/v1/chat/completions)
+//   "openai-responses" — OpenAI Responses (/v1/responses)
+//   "anthropic"        — Anthropic (/v1/messages)
+//   "gemini"           — Gemini (Native generateContent)
 
 export const API_STANDARD_LABELS = {
-    "openai-chat": "OpenAI Chat Completions",
-    "openai-responses": "OpenAI Responses API",
-    "anthropic": "Anthropic Messages",
-    "gemini": "Gemini generateContent",
+    "openai-chat": "OpenAI Chat",
+    "openai-responses": "OpenAI Responses",
+    "anthropic": "Anthropic",
+    "gemini": "Gemini",
 };
 
 export const ALL_STANDARDS = Object.keys(API_STANDARD_LABELS);

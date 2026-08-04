@@ -576,6 +576,33 @@ a:focus-visible {
   font-weight: 600;
 }
 
+/* URL rows — one per active standard in the form.
+   The grid lives on the shared container (#f-url-rows) so the max-content
+   label column widens to the longest label across all rows, and every
+   input's left edge aligns regardless of label length. */
+#f-url-rows {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  align-items: center;
+  column-gap: var(--s2);
+  row-gap: var(--s2);
+  margin-top: var(--s2);
+}
+
+.url-row {
+  display: contents;
+}
+
+.url-row-label {
+  font-size: 12px;
+  color: var(--text-soft);
+  white-space: nowrap;
+}
+
+.url-row-input {
+  min-width: 0;
+}
+
 /* Detail page standard buttons */
 .detail-std-group {
   display: flex;
@@ -612,6 +639,51 @@ a:focus-visible {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent-hover);
+}
+
+/* Detail URL list — every supported standard shown at once.
+   Same shared-grid trick as the form: one max-content label column across
+   all rows; the trailing auto column holds the per-URL copy button (absent
+   on gray rows, which stay aligned). */
+.detail-url-list {
+  display: grid;
+  grid-template-columns: max-content 1fr auto;
+  align-items: center;
+  column-gap: var(--s2);
+  row-gap: var(--s1);
+}
+
+.detail-url-row {
+  display: contents;
+}
+
+.detail-url-row[data-gray="true"] .urlval {
+  color: var(--text-faint);
+}
+
+.detail-url-label {
+  font-size: 12px;
+  color: var(--text-soft);
+  white-space: nowrap;
+}
+
+/* Explicit per-child column placement: keeps each URL row's items on one
+   line regardless of neighbors, while all rows share the same label column. */
+.detail-url-row .detail-url-label {
+  grid-column: 1;
+}
+
+.detail-url-row .urlval {
+  grid-column: 2;
+}
+
+.detail-url-row .copy-url {
+  grid-column: 3;
+}
+
+/* Bare "未配置" fallback when the record has no endpoint entries at all */
+.detail-url-list > .urlval {
+  grid-column: 1 / -1;
 }
 
 .form-error {
