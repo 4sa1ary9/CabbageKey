@@ -1,0 +1,23 @@
+# 02 — 端点 URL 行对齐
+
+**What to build:** 表单（新增/编辑）与详情面板中的端点 URL 行改为等宽标签列：每行的"协议名"标签列宽一致（自适应最长的标签），URL 输入框/URL 文本的左边框在任何协议下都对齐。协议标签改用短名：OpenAI Chat / OpenAI Responses / Anthropic / Gemini（与"支持的接口规范"按钮文字一致）。
+
+**Blocked by:** None — can start immediately
+
+**Status:** ready-for-agent
+
+- [x] 表单里多个已点亮标准同时显示时，各行 URL 输入框左边框严格对齐，与标签长短无关
+- [x] 详情面板中多个端点 URL 行同样对齐
+- [x] 标签用短名（OpenAI Chat / OpenAI Responses / Anthropic / Gemini），表单与详情面板一致
+- [x] 置灰行（URL 为空）样式保留，仅标签列变化
+- [x] `npm test` 与 `vite build` 通过
+
+## Comments
+
+2026-08-04 已实现并提交（248b606，分支 feat/vendor-presets-and-form-redesign）：
+
+- 标签短名改在 `src/vendorPresets.js` 的 `API_STANDARD_LABELS`（单一来源），表单 URL 行、详情 URL 行、详情"支持的接口规范"按钮三处同时生效，与表单 toggle 按钮文字一致；`getStandardLabel` 新增单测。
+- 对齐方案：`#f-url-rows` 与 `.detail-url-list` 作为共享 grid 容器（`grid-template-columns: max-content 1fr` / `max-content 1fr auto`），行元素 `display: contents`，标签列自动取最宽标签；详情行子元素显式 `grid-column` 定位（置灰行无复制按钮仍对齐）。
+- 浏览器实测（Playwright + 真实 styles.css 夹具）：4 行表单输入框左缘全部一致；详情 3 行（含 1 置灰行）URL 文本左缘全部一致；无端点兜底"未配置"横跨整列；长 URL（Gemini `{model}` 等）因 `word-break: break-all` 无横向溢出。
+- 验证：`npm test` 65 通过（6 文件）、`vite build` 通过。
+- 注意：本提交仅含本 ticket 的 3 个文件；styles.css 中他人遗留/并行 agent 的改动（std-toggle/detail-std-btn 置灰样式、`.vendor-dd*` 下拉样式）未包含。

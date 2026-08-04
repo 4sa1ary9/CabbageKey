@@ -2,142 +2,103 @@ import { describe, it, expect } from "vitest";
 import {
   applyVendorPreset,
   openRecordFormState,
-  saveActiveUrl,
+  backfillPresetEndpoints,
   toggleStandard,
-  focusStandard,
-  handleStdClick,
   trimEndpointUrls,
-  getDefaultStandard,
   parseTags,
   buildRecordInput,
   validateRecordInput,
 } from "./formState.js";
 
 describe("applyVendorPreset", () => {
-  it("fills website + standards and focuses the first standard", () => {
+  it("fills website + standards", () => {
     const s = applyVendorPreset("OpenAI");
     expect(s.website).toBe("https://platform.openai.com");
     expect(s.endpoints).toEqual({
       "openai-chat": "https://api.openai.com/v1/chat/completions",
       "openai-responses": "https://api.openai.com/v1/responses",
     });
-    expect(s.activeStd).toBe("openai-chat");
-  });
-
-  it("single-standard vendor focuses that standard", () => {
-    expect(applyVendorPreset("Anthropic").activeStd).toBe("anthropic");
   });
 
   it("custom/unknown vendor resets everything", () => {
-    const empty = { endpoints: {}, activeStd: null, website: "" };
+    const empty = { endpoints: {}, website: "" };
     expect(applyVendorPreset("")).toEqual(empty);
     expect(applyVendorPreset("Nope")).toEqual(empty);
   });
 });
 
 describe("openRecordFormState", () => {
-  it("loads record endpoints and focuses the first", () => {
+  it("loads record endpoints", () => {
     const s = openRecordFormState({
       id: "1",
       endpoints: { anthropic: "https://x", gemini: "https://y" },
     });
     expect(s.endpoints).toEqual({ anthropic: "https://x", gemini: "https://y" });
-    expect(s.activeStd).toBe("anthropic");
   });
 
   it("record without endpoints or null record gives empty state", () => {
-    expect(openRecordFormState(null)).toEqual({ endpoints: {}, activeStd: null });
-    expect(openRecordFormState({ id: "1" })).toEqual({ endpoints: {}, activeStd: null });
+    expect(openRecordFormState(null)).toEqual({ endpoints: {} });
+    expect(openRecordFormState({ id: "1" })).toEqual({ endpoints: {} });
   });
 });
 
-describe("saveActiveUrl", () => {
-  it("stores the input URL for the active standard, trimmed", () => {
-    const s = { endpoints: { a: "x" }, activeStd: "a" };
-    expect(saveActiveUrl(s, "  https://new ").endpoints.a).toBe("https://new");
+describe("backfillPresetEndpoints", () => {
+  it("fills only standards missing from the record, keeping existing values", () => {
+    const endpoints = { "openai-chat": "https://my-proxy/v1/chat/completions" };
+    expect(backfillPresetEndpoints(endpoints, "OpenAI")).toEqual({
+      "openai-chat": "https://my-proxy/v1/chat/completions",
+      "openai-responses": "https://api.openai.com/v1/responses",
+    });
   });
 
-  it("no-op without an active standard", () => {
-    const s = { endpoints: {}, activeStd: null };
-    expect(saveActiveUrl(s, "whatever")).toBe(s);
+  it("never overwrites existing values, even empty ones", () => {
+    const endpoints = { "openai-chat": "", "openai-responses": "https://custom" };
+    expect(backfillPresetEndpoints(endpoints, "OpenAI")).toEqual({
+      "openai-chat": "",
+      "openai-responses": "https://custom",
+    });
   });
 
-  it("does not mutate the original state", () => {
-    const s = { endpoints: { a: "x" }, activeStd: "a" };
-    saveActiveUrl(s, "y");
-    expect(s.endpoints.a).toBe("x");
+  it("custom/unknown vendor leaves endpoints untouched", () => {
+    const endpoints = { anthropic: "https://x" };
+    expect(backfillPresetEndpoints(endpoints, "")).toEqual({ anthropic: "https://x" });
+    expect(backfillPresetEndpoints(endpoints, "Kimi")).toEqual({ anthropic: "https://x" });
+  });
+
+  it("missing endpoints object backfills from scratch", () => {
+    expect(backfillPresetEndpoints(undefined, "Anthropic")).toEqual({
+      anthropic: "https://api.anthropic.com/v1/messages",
+    });
   });
 });
 
 describe("toggleStandard", () => {
-  it("activates an inactive standard with the preset URL, saving the previous URL", () => {
-    const s = { endpoints: { a: "https://a" }, activeStd: "a" };
-    const next = toggleStandard(s, "b", "  https://a-typed ", "https://preset-b");
-    expect(next.endpoints).toEqual({ a: "https://a-typed", b: "https://preset-b" });
-    expect(next.activeStd).toBe("b");
-  });
-
-  it("deactivates the active standard and refocuses the first remaining", () => {
-    const s = { endpoints: { a: "https://a", b: "https://b" }, activeStd: "a" };
-    const next = toggleStandard(s, "a", "https://a-typed", "");
-    expect(next.endpoints).toEqual({ b: "https://b" });
-    expect(next.activeStd).toBe("b");
-  });
-
-  it("deactivating the last standard leaves nothing active", () => {
-    const s = { endpoints: { a: "https://a" }, activeStd: "a" };
-    expect(toggleStandard(s, "a", "", "")).toEqual({ endpoints: {}, activeStd: null });
-  });
-});
-
-describe("focusStandard", () => {
-  it("switches the displayed standard, saving the current URL", () => {
-    const s = { endpoints: { a: "https://a", b: "https://b" }, activeStd: "a" };
-    const next = focusStandard(s, "b", " https://a-typed ");
-    expect(next.activeStd).toBe("b");
-    expect(next.endpoints).toEqual({ a: "https://a-typed", b: "https://b" });
-  });
-
-  it("no-op when the target is not active", () => {
-    const s = { endpoints: { a: "https://a" }, activeStd: "a" };
-    expect(focusStandard(s, "c", "x")).toBe(s);
-  });
-});
-
-describe("handleStdClick", () => {
-  it("focuses an already-active standard that is not displayed", () => {
-    const s = { endpoints: { a: "https://a", b: "https://b" }, activeStd: "a" };
-    const next = handleStdClick(s, "b", "https://a-typed", "");
-    expect(next.activeStd).toBe("b");
-    expect(next.endpoints.a).toBe("https://a-typed");
-  });
-
-  it("deactivates the displayed active standard", () => {
-    const s = { endpoints: { a: "https://a" }, activeStd: "a" };
-    expect(handleStdClick(s, "a", "x", "")).toEqual({ endpoints: {}, activeStd: null });
-  });
-
   it("activates an inactive standard with the preset URL", () => {
-    const s = { endpoints: {}, activeStd: null };
-    const next = handleStdClick(s, "gemini", "", "https://preset");
-    expect(next).toEqual({ endpoints: { gemini: "https://preset" }, activeStd: "gemini" });
+    const s = { endpoints: { a: "https://a" } };
+    const next = toggleStandard(s, "b", "https://preset-b");
+    expect(next.endpoints).toEqual({ a: "https://a", b: "https://preset-b" });
+  });
+
+  it("deactivates an active standard with one click", () => {
+    const s = { endpoints: { a: "https://a", b: "https://b" } };
+    expect(toggleStandard(s, "a", "")).toEqual({ endpoints: { b: "https://b" } });
+  });
+
+  it("custom vendor activates with an empty URL", () => {
+    const s = { endpoints: {} };
+    expect(toggleStandard(s, "anthropic", "")).toEqual({ endpoints: { anthropic: "" } });
+  });
+
+  it("does not mutate the original state", () => {
+    const s = { endpoints: { a: "https://a" } };
+    toggleStandard(s, "b", "https://b");
+    expect(s.endpoints).toEqual({ a: "https://a" });
   });
 });
 
 describe("trimEndpointUrls", () => {
   it("trims values and keeps keys (even empty ones)", () => {
     expect(trimEndpointUrls({ a: "  https://a  ", b: "" })).toEqual({ a: "https://a", b: "" });
-  });
-});
-
-describe("getDefaultStandard", () => {
-  it("returns the first supported standard", () => {
-    expect(getDefaultStandard({ "openai-chat": "u", anthropic: "v" })).toBe("openai-chat");
-  });
-
-  it("null for no endpoints", () => {
-    expect(getDefaultStandard({})).toBeNull();
-    expect(getDefaultStandard(null)).toBeNull();
   });
 });
 

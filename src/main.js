@@ -1,22 +1,25 @@
 // KeyVault frontend controller — thin DOM shell. Wires the vault chooser +
 // three-pane UI to Tauri commands. Testable business logic lives in
-// filter.js / vendorPresets.js / formState.js / history.js (unit-tested);
-// this file is event wiring + rendering glue.
+// filter.js / vendorPresets.js / formState.js / history.js / order.js
+// (unit-tested); this file is event wiring + rendering glue.
 import { invoke } from "@tauri-apps/api/core";
 import { writeText, clear as clearClipboard } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openDialog, save as saveDialog, message } from "@tauri-apps/plugin-dialog";
 import { filterRecords, groupByVendor, emptyStateKind } from "./filter.js";
-import { getEndpointUrl, normalizeUrl, getStandardLabel, ALL_STANDARDS } from "./vendorPresets.js";
+import { getEndpointUrl, getStandardLabel, ALL_STANDARDS } from "./vendorPresets.js";
+import { vendorCandidates, filterVendorCandidates } from "./vendorDropdown.js";
 import {
   openRecordFormState,
   applyVendorPreset,
-  saveActiveUrl,
-  handleStdClick,
+  backfillPresetEndpoints,
+  toggleStandard,
   buildRecordInput,
   validateRecordInput,
-  getDefaultStandard,
 } from "./formState.js";
 import { annotateHistoryEntries } from "./history.js";
+import { escapeHtml } from "./html.js";
+import { buildDetailBodyHtml, MASKED_API_KEY } from "./detailView.js";
+import { moveBefore } from "./order.js";
 
 const CLIPBOARD_CLEAR_SECONDS = 30; // auto-clear window after copy
 
@@ -181,7 +184,78 @@ function applyView(view) {
   if (state.selectedId && !state.records.find((r) => r.id === state.selectedId)) {
     state.selectedId = null;
   }
+  populatePurposeDatalist();
   render();
+}
+
+// Purpose candidates: distinct usage names in this vault, sorted.
+function populatePurposeDatalist() {
+  const purposeOpts = [...new Set(state.records.map((r) => r.name))].sort();
+  $("purpose-candidates").innerHTML = purposeOpts
+    .map((n) => `<option value="${escapeHtml(n)}"></option>`)
+    .join("");
+}
+
+// ---------------- Vendor dropdown (custom combobox) ----------------
+// vendorDd = { open, highlighted, list, applied } — UI state for #f-vendor.
+const vendorDd = { open: false, highlighted: -1, list: [], applied: "" };
+
+function openVendorPanel() {
+  vendorDd.open = true;
+  vendorDd.highlighted = -1;
+  $("vendor-dd-panel").hidden = false;
+  $("f-vendor").setAttribute("aria-expanded", "true");
+  renderVendorPanel();
+}
+
+function closeVendorPanel() {
+  vendorDd.open = false;
+  $("vendor-dd-panel").hidden = true;
+  $("f-vendor").setAttribute("aria-expanded", "false");
+}
+
+// Re-render the filtered candidate list, keeping the highlight in range.
+function renderVendorPanel() {
+  vendorDd.list = filterVendorCandidates(vendorCandidates(state.vendors), $("f-vendor").value);
+  if (vendorDd.highlighted >= vendorDd.list.length) vendorDd.highlighted = vendorDd.list.length - 1;
+  $("vendor-dd-list").innerHTML = vendorDd.list
+    .map(
+      (name, i) =>
+        `<li role="option" data-vendor="${escapeHtml(name)}" data-active="${vendorDd.highlighted === i}">${escapeHtml(name)}</li>`
+    )
+    .join("");
+}
+
+/** Set the vendor value and trigger the existing auto-fill rule. */
+function applyVendor(name) {
+  $("f-vendor").value = name;
+  onVendorChange();
+  closeVendorPanel();
+}
+
+function onVendorKeydown(e) {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    if (!vendorDd.open) openVendorPanel();
+    if (!vendorDd.list.length) return;
+    const step = e.key === "ArrowDown" ? 1 : -1;
+    if (vendorDd.highlighted < 0) {
+      vendorDd.highlighted = step === 1 ? 0 : vendorDd.list.length - 1;
+    } else {
+      vendorDd.highlighted = Math.min(Math.max(vendorDd.highlighted + step, 0), vendorDd.list.length - 1);
+    }
+    renderVendorPanel();
+  } else if (e.key === "Enter") {
+    if (!vendorDd.open) return; // panel closed → let the form submit normally
+    e.preventDefault();
+    if (vendorDd.highlighted >= 0) applyVendor(vendorDd.list[vendorDd.highlighted]);
+    else if ($("f-vendor").value.trim()) applyVendor($("f-vendor").value); // custom vendor
+    else closeVendorPanel();
+  } else if (e.key === "Escape") {
+    if (!vendorDd.open) return; // panel closed → let the dialog handle Escape
+    e.preventDefault();
+    closeVendorPanel();
+  }
 }
 
 // ---------------- Rendering ----------------
@@ -225,11 +299,12 @@ function renderList() {
   const list = visibleRecords();
   const ul = $("record-list");
   const empty = $("empty-state");
+  const hasActiveFilter = !!(state.query || state.vendor || state.tag);
 
   const kind = emptyStateKind({
     totalRecords: state.records.length,
     visibleRecords: list.length,
-    hasActiveFilter: !!(state.query || state.vendor || state.tag),
+    hasActiveFilter,
   });
 
   if (kind) {
@@ -239,10 +314,13 @@ function renderList() {
     return;
   }
   empty.hidden = true;
+  // Draggable only when unfiltered — reordering needs the full global order.
   ul.innerHTML = list
     .map(
       (r) =>
-        `<li><div class="record-item" data-id="${r.id}" data-active="${state.selectedId === r.id
+        `<li><div class="record-item" data-id="${r.id}" draggable="${hasActiveFilter
+        ? "false"
+        : "true"}" data-active="${state.selectedId === r.id
         }" tabindex="0" role="button">
           <div class="record-name">${escapeHtml(r.name)}</div>
           <div class="record-meta">${escapeHtml(r.vendor || "未分组")}${r.tags.length ? " · " + r.tags.map((t) => "#" + escapeHtml(t)).join(" ") : ""
@@ -274,92 +352,26 @@ function renderDetail() {
   }
   ph.hidden = true;
   content.hidden = false;
+  content.innerHTML = buildDetailBodyHtml(rec);
 
-  // Determine which standards this record supports (has endpoint for)
-  const endpoints = rec.endpoints || {};
-  const supportedStandards = Object.keys(endpoints);
-  // Default selected: first supported standard
-  const defaultStd = getDefaultStandard(endpoints);
-
-  content.innerHTML = `
-    <div class="detail-title">${escapeHtml(rec.name)}</div>
-    <div class="detail-field">
-      <div class="label">api_key</div>
-      <div class="value">
-        <span class="secret" id="secret-val" data-masked="true">••••••••••••</span>
-        <button class="icon-btn" id="reveal-btn">👁 显示</button>
-        <button class="icon-btn" id="copy-key">复制</button>
-      </div>
-    </div>
-    <div class="detail-field">
-      <div class="label">端点 URL</div>
-      <div class="value">
-        <span class="urlval" id="detail-url">${defaultStd ? escapeHtml(endpoints[defaultStd]) : "未配置"}</span>
-        ${defaultStd ? `<button class="icon-btn" id="copy-url">复制</button>` : ""}
-      </div>
-    </div>
-    <div class="detail-field">
-      <div class="label">支持的接口规范</div>
-      <div class="detail-std-group" id="detail-std-group">
-        ${ALL_STANDARDS.map((key) => {
-    const supported = supportedStandards.includes(key);
-    const selected = key === defaultStd;
-    return `<button type="button" class="detail-std-btn" data-std="${key}" data-supported="${supported}" data-selected="${selected}">${escapeHtml(getStandardLabel(key))}</button>`;
-  }).join("")}
-      </div>
-    </div>
-    ${rec.website
-      ? `<div class="detail-field"><div class="label">官网</div>
-            <div class="value"><a href="${escapeHtml(normalizeUrl(rec.website))}" target="_blank" rel="noopener">${escapeHtml(rec.website)}</a></div></div>`
-      : ""
-    }
-    ${rec.vendor ? field("厂商", escapeHtml(rec.vendor)) : ""}
-    ${rec.tags.length
-      ? `<div class="detail-field"><div class="label">标签</div><div>${rec.tags
-        .map((t) => `<span class="tag-chip">#${escapeHtml(t)}</span>`)
-        .join("")}</div></div>`
-      : ""
-    }
-    ${rec.note ? field("备注", escapeHtml(rec.note)) : ""}
-    <div class="detail-actions">
-      <button class="btn-secondary" id="edit-btn">编辑</button>
-      <button class="btn-danger" id="delete-btn">删除</button>
-    </div>`;
-
-  // Wire detail standard buttons — click to switch displayed URL
-  $("detail-std-group").addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-std]");
-    if (!btn || btn.dataset.supported !== "true") return;
-    const std = btn.dataset.std;
-    // Update URL display
-    $("detail-url").textContent = endpoints[std] || "";
-    // Update selected state
-    $("detail-std-group").querySelectorAll(".detail-std-btn").forEach((b) => {
-      b.dataset.selected = (b.dataset.std === std).toString();
-    });
+  // Per-URL copy buttons (delegated on the freshly rendered list)
+  $("detail-content").querySelector(".detail-url-list").addEventListener("click", (e) => {
+    const btn = e.target.closest(".copy-url");
+    if (!btn) return;
+    withCopied(btn, () => copyValue("url", btn.dataset.url));
   });
 
   // reveal toggles the masked key
   $("reveal-btn").onclick = () => {
     const el = $("secret-val");
     const masked = el.dataset.masked === "true";
-    el.textContent = masked ? rec.api_key : "••••••••••••";
+    el.textContent = masked ? rec.api_key : MASKED_API_KEY;
     el.dataset.masked = (!masked).toString();
     $("reveal-btn").textContent = masked ? "🙈 隐藏" : "👁 显示";
   };
   $("copy-key").onclick = () => withCopied($("copy-key"), () => copyValue("api_key", rec.api_key));
-  if ($("copy-url")) {
-    $("copy-url").onclick = () => {
-      const url = $("detail-url").textContent;
-      if (url) withCopied($("copy-url"), () => copyValue("url", url));
-    };
-  }
   $("edit-btn").onclick = () => openForm(rec);
   $("delete-btn").onclick = () => onDelete(rec);
-}
-
-function field(label, value) {
-  return `<div class="detail-field"><div class="label">${label}</div><div class="value">${value}</div></div>`;
 }
 
 async function withCopied(btn, fn) {
@@ -373,34 +385,35 @@ async function withCopied(btn, fn) {
   }, 1500);
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-
 // ---------------- Form (add / edit) ----------------
-// formState = { endpoints, activeStd } — mutated only by pure functions from
-// formState.js; this section syncs the DOM to it and reads DOM values back.
+// formState = { endpoints } — mutated only by pure functions from formState.js;
+// URL input rows mirror endpoints live via the "input" listener below.
 let formState = openRecordFormState(null);
 
-// Toggle button states mirror formState.endpoints (which standards are active).
+// Toggle buttons mirror formState.endpoints: lit = active with URL,
+// gray = active but URL empty, plain = inactive.
 function syncStdToggles() {
   $("f-standards-group").querySelectorAll(".std-toggle").forEach((btn) => {
-    btn.dataset.active = (btn.dataset.std in formState.endpoints).toString();
+    const std = btn.dataset.std;
+    const active = std in formState.endpoints;
+    const hasUrl = !!formState.endpoints[std];
+    btn.dataset.active = (active && hasUrl).toString();
+    btn.dataset.gray = (active && !hasUrl).toString();
   });
 }
 
-// Show the active standard's URL in the input (or hide the URL field).
-function syncUrlField() {
-  const { activeStd } = formState;
-  if (activeStd) {
-    $("f-url").value = formState.endpoints[activeStd] || "";
-    $("f-url-label").textContent = `端点 URL (${getStandardLabel(activeStd)})`;
-    $("f-url-field").hidden = false;
-  } else {
-    $("f-url").value = "";
-    $("f-url-label").textContent = "端点 URL";
-    $("f-url-field").hidden = true;
-  }
+// One URL input row per active standard; nothing shown when none active.
+function renderUrlRows() {
+  const stds = ALL_STANDARDS.filter((s) => s in formState.endpoints);
+  $("f-url-section").hidden = !stds.length;
+  $("f-url-rows").innerHTML = stds
+    .map(
+      (std) => `<div class="url-row" data-std="${std}">
+      <span class="url-row-label">${escapeHtml(getStandardLabel(std))}</span>
+      <input class="url-row-input" type="text" autocomplete="off" value="${escapeHtml(formState.endpoints[std])}" />
+    </div>`
+    )
+    .join("");
 }
 
 function openForm(rec) {
@@ -409,40 +422,46 @@ function openForm(rec) {
   $("f-name").value = rec ? rec.name : "";
   $("f-key").value = rec ? rec.api_key : "";
   $("f-vendor").value = rec ? rec.vendor : "";
+  vendorDd.highlighted = -1;
+  vendorDd.applied = rec ? rec.vendor || "" : "";
+  closeVendorPanel();
   $("f-website").value = rec ? (rec.website || "") : "";
   $("f-tags").value = rec ? rec.tags.join(", ") : "";
   $("f-note").value = rec ? rec.note : "";
   $("form-error").textContent = "";
-  formState = openRecordFormState(rec);
+  // Backfill preset URLs for standards the record is missing (never overwrites).
+  const st = openRecordFormState(rec);
+  formState = { endpoints: backfillPresetEndpoints(st.endpoints, rec ? rec.vendor : "") };
   syncStdToggles();
-  syncUrlField();
+  renderUrlRows();
   $("record-dialog").showModal();
   $("f-name").focus();
 }
 
-/** Vendor selector change: auto-fill website + standards from the preset. */
+/** Vendor input change: full-replace website + standards from the preset. */
 function onVendorChange() {
-  const preset = applyVendorPreset($("f-vendor").value);
+  const vendor = $("f-vendor").value;
+  vendorDd.applied = vendor;
+  const preset = applyVendorPreset(vendor);
   formState = preset;
   $("f-website").value = preset.website;
   syncStdToggles();
-  syncUrlField();
+  renderUrlRows();
 }
 
-/** Click on a standard: focus it if already active, toggle it if inactive. */
+/** Click a standard: one click toggles it on (with preset URL) or off. */
 function onStdGroupClick(e) {
   const btn = e.target.closest("[data-std]");
   if (!btn) return;
   const std = btn.dataset.std;
   const presetUrl = getEndpointUrl($("f-vendor").value, std);
-  formState = handleStdClick(formState, std, $("f-url").value, presetUrl);
+  formState = toggleStandard(formState, std, presetUrl);
   syncStdToggles();
-  syncUrlField();
+  renderUrlRows();
 }
 
 async function onFormSubmit(e) {
   e.preventDefault();
-  formState = saveActiveUrl(formState, $("f-url").value);
   const input = buildRecordInput({
     name: $("f-name").value,
     apiKey: $("f-key").value,
@@ -484,6 +503,112 @@ async function onDelete(rec) {
   } catch (e) {
     showToast(String(e));
   }
+}
+
+// ---------------- Drag-to-reorder (HTML5 DnD, no deps) ----------------
+// Reordering rewrites the global order, so drag is enabled only when no
+// filter (search / vendor / tag) is active. While dragging, the <li> moves
+// live to show the target slot; on drop the new order is computed with
+// `moveBefore` and committed via `reorder_records` (persists to disk).
+const drag = { el: null, id: null, moved: false, suppressClick: false, dropped: false };
+
+function itemIdOf(li) {
+  return li.querySelector(".record-item")?.dataset.id ?? null;
+}
+
+// Upper half of an item = slot above it; lower half = slot below it.
+function overUpperHalf(li, clientY) {
+  const rect = li.getBoundingClientRect();
+  return clientY < rect.top + rect.height / 2;
+}
+
+function onDragStart(e) {
+  const li = e.target.closest("li");
+  if (!li || !itemIdOf(li)) return;
+  drag.el = li;
+  drag.id = itemIdOf(li);
+  drag.moved = false;
+  drag.dropped = false;
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/plain", drag.id); // required for Firefox to start a drag
+  li.classList.add("dragging");
+}
+
+// `drag` fires repeatedly while the pointer moves — this is what separates a
+// real drag from a plain click (which must keep selecting the record).
+function onDrag(e) {
+  drag.moved = true;
+}
+
+function onDragOver(e) {
+  if (!drag.el) return;
+  e.preventDefault(); // required to allow the drop
+  const li = e.target.closest("li");
+  if (!li || li === drag.el) return;
+  if (overUpperHalf(li, e.clientY)) {
+    // slot above the hovered item
+    if (li.previousElementSibling !== drag.el) li.before(drag.el);
+  } else {
+    // slot below the hovered item
+    if (li.nextElementSibling !== drag.el) li.after(drag.el);
+  }
+}
+
+function onDrop(e) {
+  if (!drag.el) return;
+  e.preventDefault();
+  drag.dropped = true;
+  const el = drag.el;
+  el.classList.remove("dragging");
+  const dropLi = e.target.closest("li");
+  // Dropped on the dragged item itself or outside the items — restore.
+  if (!dropLi || dropLi === el) {
+    renderList();
+    return;
+  }
+  // "Below the target" means "before its next sibling" (skipping the dragged
+  // item, which sits right next to the target while dragging).
+  let beforeId;
+  if (overUpperHalf(dropLi, e.clientY)) {
+    beforeId = itemIdOf(dropLi);
+  } else {
+    let next = dropLi.nextElementSibling;
+    while (next === el) next = next.nextElementSibling;
+    beforeId = next ? itemIdOf(next) : null;
+  }
+  const ids = state.records.map((r) => r.id);
+  const nextOrder = moveBefore(ids, drag.id, beforeId);
+  if (nextOrder.every((id, i) => id === ids[i])) {
+    renderList(); // nothing actually changed — restore the live DOM
+    return;
+  }
+  invoke("reorder_records", { ids: nextOrder })
+    .then(applyView)
+    .catch((err) => {
+      showToast(String(err));
+      renderList(); // restore the pre-drag order
+    });
+}
+
+function onDragEnd() {
+  drag.el?.classList.remove("dragging");
+  if (!drag.dropped) renderList(); // cancelled / dropped outside — restore order
+  drag.suppressClick = drag.moved;
+  drag.el = null;
+  drag.id = null;
+}
+
+// Expire the suppress flag on the next interaction start: every click is
+// preceded by its own mousedown, so the click that trails a drag (if a
+// browser fires one) is consumed, while the user's next click works.
+function expireSuppress() {
+  drag.suppressClick = false;
+}
+
+// While a drag is active, swallow document-level drops so releasing outside
+// the list never navigates away (Chrome treats dropped text as a link).
+function swallowDrop(e) {
+  if (drag.el) e.preventDefault();
 }
 
 // ---------------- Events ----------------
@@ -535,6 +660,10 @@ function wireEvents() {
 
   // delegated record selection (click + keyboard)
   const selectFrom = (e) => {
+    if (drag.suppressClick) {
+      drag.suppressClick = false; // a real drag just ended — not a click
+      return;
+    }
     const item = e.target.closest("[data-id]");
     if (!item) return;
     state.selectedId = item.dataset.id;
@@ -547,6 +676,17 @@ function wireEvents() {
       selectFrom(e);
     }
   });
+
+  // drag-to-reorder (only enabled on items when no filter is active)
+  $("record-list").addEventListener("dragstart", onDragStart);
+  $("record-list").addEventListener("drag", onDrag);
+  $("record-list").addEventListener("dragover", onDragOver);
+  $("record-list").addEventListener("drop", onDrop);
+  $("record-list").addEventListener("dragend", onDragEnd);
+  document.addEventListener("dragover", swallowDrop);
+  document.addEventListener("drop", swallowDrop);
+  document.addEventListener("mousedown", expireSuppress);
+  document.addEventListener("keydown", expireSuppress);
 
   // empty-state buttons (delegated, they re-render)
   $("empty-state").addEventListener("click", (e) => {
@@ -570,8 +710,43 @@ function wireEvents() {
       $("record-dialog").close();
     }
   });
-  $("f-vendor").addEventListener("change", onVendorChange);
+  // Vendor dropdown: open on focus/typing, filter as you type, keyboard + click
+  // selection, click-outside close. Value changes run the auto-fill rule once —
+  // the `applied` guard stops a later blur from re-applying and clobbering edits.
+  $("f-vendor").addEventListener("focus", openVendorPanel);
+  // Reopen after the panel was closed by a click-outside (focus stays in input).
+  $("f-vendor").addEventListener("click", () => {
+    if (!vendorDd.open) openVendorPanel();
+  });
+  $("f-vendor").addEventListener("input", () => {
+    if (!vendorDd.open) openVendorPanel();
+    vendorDd.highlighted = -1;
+    renderVendorPanel();
+  });
+  $("f-vendor").addEventListener("keydown", onVendorKeydown);
+  $("f-vendor").addEventListener("blur", closeVendorPanel);
+  $("f-vendor").addEventListener("change", () => {
+    if ($("f-vendor").value !== vendorDd.applied) onVendorChange();
+  });
+  $("vendor-dd-list").addEventListener("mousedown", (e) => {
+    e.preventDefault(); // keep focus in the input so blur doesn't commit first
+    const item = e.target.closest("[data-vendor]");
+    if (item) applyVendor(item.dataset.vendor);
+  });
+  document.addEventListener("click", (e) => {
+    if (vendorDd.open && !e.target.closest("#vendor-dd")) closeVendorPanel();
+  });
   $("f-standards-group").addEventListener("click", onStdGroupClick);
+  // Typing in a URL row updates its standard live (drives lit/gray button state).
+  $("f-url-rows").addEventListener("input", (e) => {
+    const row = e.target.closest("[data-std]");
+    if (!row) return;
+    const std = row.dataset.std;
+    if (std in formState.endpoints) {
+      formState.endpoints[std] = e.target.value;
+      syncStdToggles();
+    }
+  });
 }
 
 wireEvents();

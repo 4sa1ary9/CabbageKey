@@ -74,28 +74,23 @@
     <form id="record-form" method="dialog">
       <h2 id="dialog-title">新增密钥</h2>
 
-      <!-- 1. Vendor selector (dropdown) -->
-      <label class="field">
+      <!-- 1. Vendor custom dropdown (presets + already-used names, searchable) -->
+      <div class="field">
         <span>厂商</span>
-        <select id="f-vendor">
-          <option value="">自定义</option>
-          <option value="OpenAI">OpenAI</option>
-          <option value="Anthropic">Anthropic</option>
-          <option value="Google">Google</option>
-          <option value="DeepSeek">DeepSeek</option>
-          <option value="Moonshot">Moonshot</option>
-          <option value="Zhipu">Zhipu</option>
-          <option value="Baichuan">Baichuan</option>
-          <option value="Minimax">Minimax</option>
-          <option value="01.AI">01.AI</option>
-          <option value="xAI">xAI</option>
-        </select>
-      </label>
+        <div class="vendor-dd" id="vendor-dd">
+          <input id="f-vendor" type="text" autocomplete="off" placeholder="选择或输入厂商"
+            role="combobox" aria-expanded="false" aria-controls="vendor-dd-panel" aria-autocomplete="list" />
+          <div class="vendor-dd-panel" id="vendor-dd-panel" hidden>
+            <ul id="vendor-dd-list" role="listbox"></ul>
+          </div>
+        </div>
+      </div>
 
       <!-- 2. Usage name (required) -->
       <label class="field">
         <span>用途名称 <em class="req">*</em></span>
-        <input id="f-name" type="text" required autocomplete="off" />
+        <input id="f-name" type="text" required autocomplete="off" list="purpose-candidates" />
+        <datalist id="purpose-candidates"></datalist>
       </label>
 
       <!-- 3. API key (required) -->
@@ -115,11 +110,11 @@
         </div>
       </div>
 
-      <!-- 5. Endpoint URL (shows for currently focused standard) -->
-      <label class="field" id="f-url-field">
-        <span id="f-url-label">端点 URL</span>
-        <input id="f-url" type="text" autocomplete="off" />
-      </label>
+      <!-- 5. Endpoint URL rows — one per active standard, hidden when none -->
+      <div class="field" id="f-url-section">
+        <span>端点 URL</span>
+        <div id="f-url-rows"></div>
+      </div>
 
       <!-- 6. Website -->
       <label class="field">

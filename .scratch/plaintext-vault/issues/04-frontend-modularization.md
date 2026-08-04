@@ -1,0 +1,22 @@
+# 04 — 前端控制器模块化：薄 DOM 壳 + 纯逻辑下沉
+
+**What to build:** 把 784 行的前端主控制器拆分为"薄 DOM 壳 + 独立纯逻辑模块"：可测的业务逻辑（至少包括厂商预设联动、表单状态管理）下沉为独立模块，DOM 壳只做事件绑定与渲染。新模块按 filter 测试的先例补 vitest 覆盖。这是"觉得不好改"的直接治疗——此后改 UI 行为不再需要读懂整个控制器。
+
+**Blocked by:** 02 — 无密码主流程（可与 03 并行；两者都动前端控制器，单线作业时建议先 03 后 04）
+
+**Status:** ready-for-human
+
+- [x] 主控制器拆为薄 DOM 壳 + 独立纯逻辑模块，DOM 壳中不含可测业务逻辑
+- [x] 新抽出的纯逻辑模块（预设联动、表单状态等）有 vitest 覆盖
+- [x] 既有 27 个前端测试原样通过，新测试全绿
+- [x] 手工冒烟：主界面增删改 / 筛选 / 复制 / 预设联动无回归
+
+## Comments
+
+### 2026-08-03 — 已实现（ready-for-agent → 待人工复核）
+
+- 新增 `src/formState.js` 纯逻辑模块（无 Tauri/DOM）：`applyVendorPreset`（厂商预设联动）、`handleStdClick`/`toggleStandard`/`focusStandard`/`saveActiveUrl`（接口规范 toggle/focus 状态机）、`buildRecordInput`/`parseTags`/`validateRecordInput`/`trimEndpointUrls`（提交载荷）、`getDefaultStandard`（详情面板默认标准）。
+- `src/main.js` 由 610 行精简为 527 行（净减 83）：表单区只保留 `syncStdToggles`/`syncUrlField` 两个 DOM 同步函数 + 事件处理器，状态机全部委托给 formState.js。
+- 行为与原版等价，仅一处 DOM 细节不同：厂商切回"自定义"时 URL 标签现在一并复位为"端点 URL"（旧代码残留上一个厂商的标签，但因 URL 字段同时隐藏，用户不可见；此复位与旧 `openForm` 的 else 分支行为一致）。其余细节（空 URL endpoint key 保留、首个标准默认聚焦、厂商切换重置等）均原样保持。
+- 测试：新增 `src/formState.test.js` 25 例（TDD 先写后实现）；全量 56/56 通过（既有 31 例原样通过 + 新 25 例）。
+- 冒烟：playwright 注入 Tauri stub 驱动真实浏览器完成 增→编辑回填→标准切换/停用→筛选/清除→复制/toast→删除 全流程，零 JS 错误；真实 Tauri 桥接未变，建议人工再过一遍真机流程。

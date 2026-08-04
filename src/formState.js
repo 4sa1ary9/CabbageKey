@@ -1,39 +1,46 @@
 // Pure form-state logic for the add/edit dialog: vendor preset auto-fill,
-// the API-standard toggle/focus state machine, and submit payload building.
+// preset URL backfill on edit, and the API-standard toggle state.
 // No Tauri, no DOM here so it can be unit-tested with vitest.
 import { getPreset } from "./vendorPresets.js";
 
-// FormState = { endpoints: { standardKey → url }, activeStd: standardKey|null }
-
-/** First key of an object, or null when empty. */
-function firstKey(obj) {
-  const keys = Object.keys(obj);
-  return keys[0] || null;
-}
+// FormState = { endpoints: { standardKey → url } }
 
 /** Fresh form state. */
-function createFormState(endpoints = {}, activeStd = null) {
-  return { endpoints: { ...endpoints }, activeStd };
+function createFormState(endpoints = {}) {
+  return { endpoints: { ...endpoints } };
 }
 
 /** State for the form when opened on a record (pass null for add). */
 export function openRecordFormState(record) {
   const endpoints = record && record.endpoints ? record.endpoints : {};
-  return createFormState(endpoints, firstKey(endpoints));
+  return createFormState(endpoints);
 }
 
-/** Vendor preset auto-fill: website + standards + focus the first standard. */
+/** Vendor preset auto-fill: website + standards (full replace). */
 export function applyVendorPreset(vendorName) {
   const preset = getPreset(vendorName);
-  if (!preset) return { endpoints: {}, activeStd: null, website: "" };
-  const endpoints = { ...preset.standards };
-  return { endpoints, activeStd: firstKey(endpoints), website: preset.website };
+  if (!preset) return { endpoints: {}, website: "" };
+  return { endpoints: { ...preset.standards }, website: preset.website };
 }
 
-/** Save the URL currently shown in the input into the active standard. */
-export function saveActiveUrl(state, url) {
-  if (!state.activeStd) return state;
-  return { ...state, endpoints: { ...state.endpoints, [state.activeStd]: String(url).trim() } };
+/** Backfill: fill in only standards missing from the record's endpoints,
+ *  never overwriting existing values (not even empty ones). */
+export function backfillPresetEndpoints(endpoints, vendorName) {
+  const preset = getPreset(vendorName);
+  const merged = { ...(endpoints || {}) };
+  if (!preset) return merged;
+  for (const [std, url] of Object.entries(preset.standards)) {
+    if (!(std in merged)) merged[std] = url;
+  }
+  return merged;
+}
+
+/** Toggle a standard: add it (with presetUrl, empty for custom vendors) or remove it. */
+export function toggleStandard(state, std, presetUrl) {
+  const endpoints = { ...state.endpoints };
+  if (std in endpoints) delete endpoints[std];
+  else endpoints[std] = presetUrl;
+  return createFormState(endpoints);
 }
 
 /** Trim endpoint URL values (keys are kept — matches previous submit behavior). */
@@ -41,37 +48,6 @@ export function trimEndpointUrls(endpoints) {
   const out = {};
   for (const [key, val] of Object.entries(endpoints)) out[key] = String(val).trim();
   return out;
-}
-
-/** Toggle a standard: activate it (fill presetUrl) or deactivate it and refocus the first remaining. */
-export function toggleStandard(state, std, currentUrl, presetUrl) {
-  const next = saveActiveUrl(state, currentUrl);
-  if (next.endpoints[std] !== undefined) {
-    const endpoints = { ...next.endpoints };
-    delete endpoints[std];
-    return createFormState(endpoints, firstKey(endpoints));
-  }
-  return createFormState({ ...next.endpoints, [std]: presetUrl }, std);
-}
-
-/** Switch the displayed standard, saving the current URL first. No-op if std is not active. */
-export function focusStandard(state, std, currentUrl) {
-  if (state.endpoints[std] === undefined) return state;
-  const next = saveActiveUrl(state, currentUrl);
-  return createFormState(next.endpoints, std);
-}
-
-/** Combined click decision: focus an already-active standard, else toggle it. */
-export function handleStdClick(state, std, currentUrl, presetUrl) {
-  if (state.endpoints[std] !== undefined && std !== state.activeStd) {
-    return focusStandard(state, std, currentUrl);
-  }
-  return toggleStandard(state, std, currentUrl, presetUrl);
-}
-
-/** First supported standard shown in the detail panel, or null. */
-export function getDefaultStandard(endpoints) {
-  return firstKey(endpoints || {});
 }
 
 /** "翻译, 项目A" → ["翻译", "项目A"] (trims, drops empties). */

@@ -373,6 +373,20 @@ a:focus-visible {
   background: var(--rail-bg);
 }
 
+/* drag-to-reorder: grab cursor when enabled, dim the item being dragged.
+   The live gap between items doubles as the drop placeholder. */
+.record-item[draggable="true"] {
+  cursor: grab;
+}
+
+.record-item[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+li.dragging {
+  opacity: 0.45;
+}
+
 .record-item[data-active="true"] {
   background: var(--accent-soft);
 }
@@ -576,6 +590,15 @@ a:focus-visible {
   font-weight: 600;
 }
 
+/* Active but URL empty — grayed out */
+.std-toggle[data-gray="true"] {
+  background: var(--surface);
+  border-style: dashed;
+  border-color: var(--border);
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
 /* URL rows — one per active standard in the form.
    The grid lives on the shared container (#f-url-rows) so the max-content
    label column widens to the longest label across all rows, and every
@@ -603,6 +626,45 @@ a:focus-visible {
   min-width: 0;
 }
 
+/* Vendor custom dropdown — panel overlays the form like a real combobox */
+.vendor-dd {
+  position: relative;
+}
+
+.vendor-dd-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+.vendor-dd-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--s1);
+}
+
+.vendor-dd-list li {
+  padding: var(--s1) var(--s2);
+  border-radius: var(--radius);
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.vendor-dd-list li:hover,
+.vendor-dd-list li[data-active="true"] {
+  background: var(--rail-bg);
+  color: var(--accent-hover);
+}
+
 /* Detail page standard buttons */
 .detail-std-group {
   display: flex;
@@ -626,19 +688,15 @@ a:focus-visible {
   color: var(--accent-hover);
   background: var(--accent-soft);
   border-color: var(--accent);
-  cursor: pointer;
   font-weight: 600;
 }
 
-.detail-std-btn[data-supported="true"]:hover {
-  background: var(--accent);
-  color: #fff;
-}
-
-.detail-std-btn[data-selected="true"] {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent-hover);
+.detail-std-btn[data-gray="true"] {
+  background: var(--surface);
+  border-style: dashed;
+  border-color: var(--border);
+  color: var(--text-faint);
+  font-weight: 400;
 }
 
 /* Detail URL list — every supported standard shown at once.
