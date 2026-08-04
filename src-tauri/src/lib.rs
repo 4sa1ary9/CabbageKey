@@ -2,11 +2,8 @@
 //! and exposes commands to the frontend.
 //!
 //! The vault is a single plaintext JSON file, read and written directly — no
-//! encryption, no password, no session secrets. The `crypto` module remains in
-//! the repo only for the one-off migration tool (`bin/migrate_vault.rs`); the
-//! app main path never calls it.
+//! encryption, no password, no session secrets.
 
-pub mod crypto;
 pub mod vault;
 
 use std::path::PathBuf;
