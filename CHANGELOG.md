@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.0] — 2026-08-04
+
+### ⚠️ 破坏性变更：明文化重构（威胁模型变化）
+
+**vault 从此是明文 JSON，不再加密。** API key 明文落盘，任何能读本机硬盘的程序 / 人 / 备份软件都可取得 key 原文；兜底是本机账户密码 / BitLocker 全盘加密，与 `~/.aws/credentials`、`~/.ssh` 明文私钥同级（用户已知情接受，见 `docs/adr/0002-plaintext-storage-no-password.md`）。
+
+**不要把 vault 文件放进网盘 / 云同步目录**——明文一旦上传即泄露。迁移 = 拷贝文件夹，不是同步。
+
+### 删除
+
+- **整个加密层**：Argon2id / AES-256-GCM / KAT 固定向量测试、crypto 模块（仓库不再含任何加密代码）
+- **主密码与锁屏**：锁屏三模式（choose/unlock/create）、解锁/创建需密码、错误密码报错
+- **"记住我 / 免密登录"**：config.json 中的 remember 凭据、auto_unlock、forget_session
+- **网盘同步设计**：sha256 冲突检测、保存前哈希比对警告、`.bak` 自动备份
+- **明文导出命令**（vault 本身就是明文）、CRUD 命令的 `force` 参数
+- **依赖**：aes-gcm / argon2 / rand / zeroize / sha2 / base64 / hex
+- **一次性迁移工具** `migrate_vault`（已完成使命：旧加密 vault → 明文 JSON，用户已核对迁移数据）
+
+### 新增
+
+- **无密码启动**：上次 vault 存在时启动直进主界面，全程无密码
+- **vault 选择页**：打开已有 / 新建 / 最近历史（最多 10 条、失效置灰、单条移除），主界面内"切换 vault"入口
+- **明文格式 golden test**：逐字节冻结磁盘 JSON（schema_version 1），接替原 KAT"防静默改格式"的角色
+- **前端控制器模块化**：薄 DOM 壳 + 纯逻辑模块（filter / vendorPresets / formState / history，全部有单测）
+
+### 保留
+
+- 厂商预设（10 家）、4 种接口规范 + endpoints 映射、官网超链接
+- 三栏 UI（筛选 / 列表 / 详情）、标签 / 备注 / 搜索三路筛选
+- 字段级一键复制 + 剪贴板自动清空（30 秒）
+- 原子写（tmp+rename，防崩溃半截文件）；防数据丢失 = 原子写 + 用户自己的备份习惯
+
+---
+
 ## [0.2.0] — 2026-06-21
 
 ### 新增

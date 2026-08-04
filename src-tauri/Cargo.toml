@@ -1,7 +1,7 @@
 [package]
 name = "keyvault"
-version = "0.2.0"
-description = "本地加密 API key 收纳工具"
+version = "0.3.0"
+description = "本地、无密码的 API key 收纳工具（明文 JSON，拷贝文件夹即迁移）"
 authors = ["michael"]
 edition = "2021"
 rust-version = "1.77"
