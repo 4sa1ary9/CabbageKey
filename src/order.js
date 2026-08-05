@@ -18,3 +18,17 @@ export function moveBefore(ids, fromId, beforeId) {
   out.splice(at, 0, fromId);
   return out;
 }
+
+/**
+ * Insertion slot from a cursor Y over static row geometry (document order).
+ * Returns the id of the first row whose midpoint is below the cursor (the
+ * row to insert before), or null to append at the end. `rows` come from
+ * getBoundingClientRect during dragover — the drop target never depends on
+ * the dragged row's own position, only on where the cursor is.
+ */
+export function insertionSlot(rows, y) {
+  for (const r of rows) {
+    if (y < r.top + (r.bottom - r.top) / 2) return r.id;
+  }
+  return null;
+}

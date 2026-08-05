@@ -364,6 +364,9 @@ a:focus-visible {
 }
 
 .record-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
   padding: var(--s2) var(--s3);
   border-bottom: 1px solid var(--border);
   cursor: pointer;
@@ -373,18 +376,61 @@ a:focus-visible {
   background: var(--rail-bg);
 }
 
-/* drag-to-reorder: grab cursor when enabled, dim the item being dragged.
-   The live gap between items doubles as the drop placeholder. */
-.record-item[draggable="true"] {
-  cursor: grab;
+.record-main {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.record-item[draggable="true"]:active {
+/* drag-to-reorder: a handle on the right starts a pointer-event drag.
+   The source row dims then hides; a ghost box follows the cursor and a
+   dashed slot marker shows where the row will land. */
+.drag-handle {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 12px;
+  cursor: grab;
+  background: repeating-linear-gradient(
+    0deg,
+    var(--text-faint) 0 2px,
+    transparent 2px 4px
+  );
+  opacity: 0.6;
+}
+
+.drag-handle:hover {
+  opacity: 1;
+}
+
+.drag-handle:active {
   cursor: grabbing;
 }
 
 li.dragging {
   opacity: 0.45;
+}
+
+li.drop-slot {
+  margin: 0 var(--s3);
+  background: var(--accent-soft);
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius);
+  pointer-events: none;
+}
+
+/* Ghost of the dragged row — looks like the row itself, floating. */
+.drag-ghost {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  opacity: 0.9;
+}
+
+.record-list {
+  user-select: none;
 }
 
 .record-item[data-active="true"] {

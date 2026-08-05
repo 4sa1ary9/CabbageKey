@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { moveBefore } from "./order.js";
+import { moveBefore, insertionSlot } from "./order.js";
 
 describe("moveBefore", () => {
   it("moves an earlier element to just before a later one", () => {
@@ -40,5 +40,34 @@ describe("moveBefore", () => {
     const ids = ["a", "b", "c"];
     moveBefore(ids, "a", null);
     expect(ids).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("insertionSlot", () => {
+  const rows = [
+    { id: "a", top: 0, bottom: 40 },
+    { id: "b", top: 40, bottom: 80 },
+    { id: "c", top: 80, bottom: 120 },
+  ];
+
+  it("cursor above the first midpoint inserts before the first row", () => {
+    expect(insertionSlot(rows, 5)).toBe("a");
+    expect(insertionSlot(rows, 19)).toBe("a");
+  });
+
+  it("cursor past a midpoint inserts before the next row", () => {
+    expect(insertionSlot(rows, 20)).toBe("b");
+    expect(insertionSlot(rows, 59)).toBe("b");
+    expect(insertionSlot(rows, 60)).toBe("c");
+    expect(insertionSlot(rows, 99)).toBe("c");
+  });
+
+  it("cursor below the last midpoint appends at the end", () => {
+    expect(insertionSlot(rows, 100)).toBeNull();
+    expect(insertionSlot(rows, 121)).toBeNull();
+  });
+
+  it("empty geometry appends at the end", () => {
+    expect(insertionSlot([], 50)).toBeNull();
   });
 });

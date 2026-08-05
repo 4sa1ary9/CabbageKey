@@ -20,7 +20,7 @@ import {
 import { annotateHistoryEntries } from "./history.js";
 import { escapeHtml } from "./html.js";
 import { buildDetailBodyHtml, MASKED_API_KEY } from "./detailView.js";
-import { moveBefore } from "./order.js";
+import { moveBefore, insertionSlot } from "./order.js";
 
 const CLIPBOARD_CLEAR_SECONDS = 30; // auto-clear window after copy
 
@@ -315,17 +315,20 @@ function renderList() {
     return;
   }
   empty.hidden = true;
-  // Draggable only when unfiltered — reordering needs the full global order.
+  // Drag handle rendered only when unfiltered — reordering needs the full order.
   ul.innerHTML = list
     .map(
       (r) =>
-        `<li><div class="record-item" data-id="${r.id}" draggable="${hasActiveFilter
-        ? "false"
-        : "true"}" data-active="${state.selectedId === r.id
+        `<li><div class="record-item" data-id="${r.id}" data-active="${state.selectedId === r.id
         }" tabindex="0" role="button">
-          <div class="record-name">${escapeHtml(r.name)}</div>
-          <div class="record-meta">${escapeHtml(r.vendor || "未分组")}${r.tags.length ? " · " + r.tags.map((t) => "#" + escapeHtml(t)).join(" ") : ""
+          <div class="record-main">
+            <div class="record-name">${escapeHtml(r.name)}</div>
+            <div class="record-meta">${escapeHtml(r.vendor || "未分组")}${r.tags.length ? " · " + r.tags.map((t) => "#" + escapeHtml(t)).join(" ") : ""
         }</div>
+          </div>
+          ${hasActiveFilter
+          ? ""
+          : `<span class="drag-handle" title="按住拖拽排序"></span>`}
         </div></li>`
     )
     .join("");
@@ -541,81 +544,116 @@ async function onDelete(rec) {
   }
 }
 
-// ---------------- Drag-to-reorder (HTML5 DnD, no deps) ----------------
-// Reordering rewrites the global order, so drag is enabled only when no
-// filter (search / vendor / tag) is active. While dragging, the <li> moves
-// live to show the target slot; on drop the new order is computed with
-// `moveBefore` and committed via `reorder_records` (persists to disk).
-const drag = { el: null, id: null, moved: false, suppressClick: false, dropped: false };
+// ---------------- Drag-to-reorder (pointer events, no HTML5 DnD) ----------------
+// HTML5 drag-and-drop is unreliable inside Tauri's WebView2 on Windows (the
+// native DnD layer swallows dragover/drop), so reordering is implemented with
+// pointer events: a ghost box follows the cursor, the source row hides and
+// the rows below make room for a slot marker, and on pointerup the order is
+// committed via `reorder_records` (persists to disk). Reorder is disabled
+// when a filter is active (handle is not rendered).
+const drag = {
+  el: null, id: null, beforeId: null, moved: false, suppressClick: false,
+  startX: 0, startY: 0, offsetY: 0, rowHeight: 0, ghost: null, slot: null,
+};
 
 function itemIdOf(li) {
   return li.querySelector(".record-item")?.dataset.id ?? null;
 }
 
-// Upper half of an item = slot above it; lower half = slot below it.
-function overUpperHalf(li, clientY) {
-  const rect = li.getBoundingClientRect();
-  return clientY < rect.top + rect.height / 2;
+function clearDropSlot() {
+  drag.slot?.remove();
+  drag.slot = null;
 }
 
-function onDragStart(e) {
+function clearGhost() {
+  drag.ghost?.remove();
+  drag.ghost = null;
+}
+
+// Static row geometry in document order, excluding the dragged row and the
+// slot marker — the basis for slot computation.
+function rowGeometry() {
+  return [...$("record-list").children]
+    .map((li) => {
+      const id = itemIdOf(li);
+      if (!id || id === drag.id) return null;
+      const r = li.getBoundingClientRect();
+      return { id, top: r.top, bottom: r.bottom };
+    })
+    .filter(Boolean);
+}
+
+function onHandlePointerDown(e) {
+  if (e.button !== 0 || !e.target.closest(".drag-handle")) return;
   const li = e.target.closest("li");
   if (!li || !itemIdOf(li)) return;
   drag.el = li;
   drag.id = itemIdOf(li);
+  drag.beforeId = null;
   drag.moved = false;
-  drag.dropped = false;
-  e.dataTransfer.effectAllowed = "move";
-  e.dataTransfer.setData("text/plain", drag.id); // required for Firefox to start a drag
-  li.classList.add("dragging");
+  drag.startX = e.clientX;
+  drag.startY = e.clientY;
+  drag.offsetY = e.clientY - li.getBoundingClientRect().top;
+  window.addEventListener("pointermove", onHandlePointerMove);
+  window.addEventListener("pointerup", onHandlePointerUp);
+  window.addEventListener("pointercancel", onHandlePointerUp);
 }
 
-// `drag` fires repeatedly while the pointer moves — this is what separates a
-// real drag from a plain click (which must keep selecting the record).
-function onDrag(e) {
-  drag.moved = true;
-}
-
-function onDragOver(e) {
+// Ghost + slot appear once the pointer moves past the click threshold — a
+// press without movement stays a plain click (selects the record).
+function onHandlePointerMove(e) {
   if (!drag.el) return;
-  e.preventDefault(); // required to allow the drop
-  const li = e.target.closest("li");
-  if (!li || li === drag.el) return;
-  if (overUpperHalf(li, e.clientY)) {
-    // slot above the hovered item
-    if (li.previousElementSibling !== drag.el) li.before(drag.el);
-  } else {
-    // slot below the hovered item
-    if (li.nextElementSibling !== drag.el) li.after(drag.el);
+  if (!drag.moved) {
+    if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < 5) return;
+    drag.moved = true;
+    const rect = drag.el.getBoundingClientRect();
+    drag.rowHeight = rect.height; // measured BEFORE hiding the row
+    drag.el.classList.add("dragging");
+    const ghost = drag.el.querySelector(".record-item").cloneNode(true);
+    ghost.querySelector(".drag-handle")?.remove();
+    ghost.classList.add("drag-ghost");
+    ghost.style.width = `${rect.width}px`;
+    document.body.appendChild(ghost);
+    drag.ghost = ghost;
+    drag.el.style.display = "none"; // rows below close the gap
   }
+  const ghostWidth = drag.ghost.offsetWidth;
+  drag.ghost.style.left = `${e.clientX - ghostWidth / 2}px`;
+  drag.ghost.style.top = `${e.clientY - drag.offsetY}px`;
+  // Move the slot marker to the insertion point (below the cursor); rows
+  // below it shift down by one row height.
+  const beforeId = insertionSlot(rowGeometry(), e.clientY);
+  if (beforeId === drag.beforeId) return;
+  drag.beforeId = beforeId;
+  clearDropSlot();
+  const slot = document.createElement("li");
+  slot.className = "drop-slot";
+  slot.style.height = `${drag.rowHeight}px`;
+  if (beforeId) {
+    const target = $("record-list").querySelector(`[data-id="${CSS.escape(beforeId)}"]`)?.closest("li");
+    if (target) target.before(slot);
+  } else {
+    $("record-list").append(slot);
+  }
+  drag.slot = slot;
 }
 
-function onDrop(e) {
+function onHandlePointerUp(e) {
   if (!drag.el) return;
-  e.preventDefault();
-  drag.dropped = true;
+  window.removeEventListener("pointermove", onHandlePointerMove);
+  window.removeEventListener("pointerup", onHandlePointerUp);
+  window.removeEventListener("pointercancel", onHandlePointerUp);
   const el = drag.el;
+  drag.el = null;
+  if (!drag.moved) return; // plain click on the handle — selects the row
+  clearGhost();
+  clearDropSlot();
   el.classList.remove("dragging");
-  const dropLi = e.target.closest("li");
-  // Dropped on the dragged item itself or outside the items — restore.
-  if (!dropLi || dropLi === el) {
-    renderList();
-    return;
-  }
-  // "Below the target" means "before its next sibling" (skipping the dragged
-  // item, which sits right next to the target while dragging).
-  let beforeId;
-  if (overUpperHalf(dropLi, e.clientY)) {
-    beforeId = itemIdOf(dropLi);
-  } else {
-    let next = dropLi.nextElementSibling;
-    while (next === el) next = next.nextElementSibling;
-    beforeId = next ? itemIdOf(next) : null;
-  }
   const ids = state.records.map((r) => r.id);
-  const nextOrder = moveBefore(ids, drag.id, beforeId);
+  const nextOrder = moveBefore(ids, drag.id, drag.beforeId);
+  drag.suppressClick = true; // the click trailing a drag must not select
   if (nextOrder.every((id, i) => id === ids[i])) {
-    renderList(); // nothing actually changed — restore the live DOM
+    renderList(); // nothing actually changed — restore
     return;
   }
   invoke("reorder_records", { ids: nextOrder })
@@ -626,25 +664,11 @@ function onDrop(e) {
     });
 }
 
-function onDragEnd() {
-  drag.el?.classList.remove("dragging");
-  if (!drag.dropped) renderList(); // cancelled / dropped outside — restore order
-  drag.suppressClick = drag.moved;
-  drag.el = null;
-  drag.id = null;
-}
-
 // Expire the suppress flag on the next interaction start: every click is
 // preceded by its own mousedown, so the click that trails a drag (if a
 // browser fires one) is consumed, while the user's next click works.
 function expireSuppress() {
   drag.suppressClick = false;
-}
-
-// While a drag is active, swallow document-level drops so releasing outside
-// the list never navigates away (Chrome treats dropped text as a link).
-function swallowDrop(e) {
-  if (drag.el) e.preventDefault();
 }
 
 // ---------------- Events ----------------
@@ -718,14 +742,8 @@ function wireEvents() {
     }
   });
 
-  // drag-to-reorder (only enabled on items when no filter is active)
-  $("record-list").addEventListener("dragstart", onDragStart);
-  $("record-list").addEventListener("drag", onDrag);
-  $("record-list").addEventListener("dragover", onDragOver);
-  $("record-list").addEventListener("drop", onDrop);
-  $("record-list").addEventListener("dragend", onDragEnd);
-  document.addEventListener("dragover", swallowDrop);
-  document.addEventListener("drop", swallowDrop);
+  // drag-to-reorder via pointer events (only the handle starts a drag)
+  $("record-list").addEventListener("pointerdown", onHandlePointerDown);
   document.addEventListener("mousedown", expireSuppress);
   document.addEventListener("keydown", expireSuppress);
 
