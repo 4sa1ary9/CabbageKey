@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { moveBefore, insertionSlot } from "./order.js";
+import { moveBefore, insertionSlot, nextAfterId } from "./order.js";
 
 describe("moveBefore", () => {
   it("moves an earlier element to just before a later one", () => {
@@ -69,5 +69,21 @@ describe("insertionSlot", () => {
 
   it("empty geometry appends at the end", () => {
     expect(insertionSlot([], 50)).toBeNull();
+  });
+});
+
+describe("nextAfterId", () => {
+  it("returns the id right after the last visible one", () => {
+    expect(nextAfterId(["a", "b", "c"], "b")).toBe("c");
+  });
+
+  it("null when the visible record is already last", () => {
+    expect(nextAfterId(["a", "b", "c"], "c")).toBeNull();
+  });
+
+  it("null for an unknown id or missing argument", () => {
+    expect(nextAfterId(["a", "b"], "nope")).toBeNull();
+    expect(nextAfterId(["a", "b"], null)).toBeNull();
+    expect(nextAfterId(["a", "b"], undefined)).toBeNull();
   });
 });

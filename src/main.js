@@ -20,7 +20,7 @@ import {
 import { annotateHistoryEntries } from "./history.js";
 import { escapeHtml } from "./html.js";
 import { buildDetailBodyHtml, MASKED_API_KEY } from "./detailView.js";
-import { moveBefore, insertionSlot } from "./order.js";
+import { moveBefore, insertionSlot, nextAfterId } from "./order.js";
 
 const CLIPBOARD_CLEAR_SECONDS = 30; // auto-clear window after copy
 
@@ -283,7 +283,7 @@ function renderRail() {
     .map(
       (v) =>
         `<li><button class="rail-item" data-vendor="${escapeHtml(v)}" data-active="${state.vendor === v
-        }">${escapeHtml(v)} <span class="count">${groups[v] || 0}</span></button></li>`
+        }">${escapeHtml(v)} <span class="count">${groups[v] || 0}</span></button><span class="drag-handle" title="按住拖拽排序"></span></li>`
     )
     .join("");
 
@@ -315,7 +315,6 @@ function renderList() {
     return;
   }
   empty.hidden = true;
-  // Drag handle rendered only when unfiltered — reordering needs the full order.
   ul.innerHTML = list
     .map(
       (r) =>
@@ -326,9 +325,7 @@ function renderList() {
             <div class="record-meta">${escapeHtml(r.vendor || "未分组")}${r.tags.length ? " · " + r.tags.map((t) => "#" + escapeHtml(t)).join(" ") : ""
         }</div>
           </div>
-          ${hasActiveFilter
-          ? ""
-          : `<span class="drag-handle" title="按住拖拽排序"></span>`}
+          <span class="drag-handle" title="按住拖拽排序"></span>
         </div></li>`
     )
     .join("");
@@ -553,11 +550,13 @@ async function onDelete(rec) {
 // when a filter is active (handle is not rendered).
 const drag = {
   el: null, id: null, beforeId: null, moved: false, suppressClick: false,
-  startX: 0, startY: 0, offsetY: 0, rowHeight: 0, ghost: null, slot: null,
+  list: null, allIds: [], startX: 0, startY: 0, offsetY: 0, rowHeight: 0,
+  ghost: null, slot: null,
 };
 
 function itemIdOf(li) {
-  return li.querySelector(".record-item")?.dataset.id ?? null;
+  const el = li.querySelector("[data-id]") ?? li.querySelector("[data-vendor]");
+  return el?.dataset.id ?? el?.dataset.vendor ?? null;
 }
 
 function clearDropSlot() {
@@ -572,8 +571,8 @@ function clearGhost() {
 
 // Static row geometry in document order, excluding the dragged row and the
 // slot marker — the basis for slot computation.
-function rowGeometry() {
-  return [...$("record-list").children]
+function rowGeometry(list) {
+  return [...list.children]
     .map((li) => {
       const id = itemIdOf(li);
       if (!id || id === drag.id) return null;
@@ -585,12 +584,16 @@ function rowGeometry() {
 
 function onHandlePointerDown(e) {
   if (e.button !== 0 || !e.target.closest(".drag-handle")) return;
+  const list = e.target.closest("#record-list") ?? e.target.closest("#vendor-list");
+  if (!list) return;
   const li = e.target.closest("li");
   if (!li || !itemIdOf(li)) return;
+  drag.list = list;
   drag.el = li;
   drag.id = itemIdOf(li);
   drag.beforeId = null;
   drag.moved = false;
+  drag.allIds = list === $("record-list") ? state.records.map((r) => r.id) : state.vendors;
   drag.startX = e.clientX;
   drag.startY = e.clientY;
   drag.offsetY = e.clientY - li.getBoundingClientRect().top;
@@ -609,7 +612,8 @@ function onHandlePointerMove(e) {
     const rect = drag.el.getBoundingClientRect();
     drag.rowHeight = rect.height; // measured BEFORE hiding the row
     drag.el.classList.add("dragging");
-    const ghost = drag.el.querySelector(".record-item").cloneNode(true);
+    const src = drag.el.querySelector(".record-item") ?? drag.el.querySelector(".rail-item");
+    const ghost = src.cloneNode(true);
     ghost.querySelector(".drag-handle")?.remove();
     ghost.classList.add("drag-ghost");
     ghost.style.width = `${rect.width}px`;
@@ -622,19 +626,25 @@ function onHandlePointerMove(e) {
   drag.ghost.style.top = `${e.clientY - drag.offsetY}px`;
   // Move the slot marker to the insertion point (below the cursor); rows
   // below it shift down by one row height.
-  const beforeId = insertionSlot(rowGeometry(), e.clientY);
+  let beforeId = insertionSlot(rowGeometry(drag.list), e.clientY);
+  if (beforeId === null && drag.list === $("record-list")) {
+    // Dropped below the last visible row of a filtered view: the record
+    // lands right after that row in the global order, not at vault's end.
+    const visible = visibleRecords();
+    const lastVisibleId = visible.length ? visible[visible.length - 1].id : null;
+    beforeId = nextAfterId(drag.allIds, lastVisibleId);
+  }
   if (beforeId === drag.beforeId) return;
   drag.beforeId = beforeId;
   clearDropSlot();
   const slot = document.createElement("li");
   slot.className = "drop-slot";
   slot.style.height = `${drag.rowHeight}px`;
-  if (beforeId) {
-    const target = $("record-list").querySelector(`[data-id="${CSS.escape(beforeId)}"]`)?.closest("li");
-    if (target) target.before(slot);
-  } else {
-    $("record-list").append(slot);
-  }
+  const target = beforeId
+    ? drag.list.querySelector(`[data-id="${CSS.escape(beforeId)}"], [data-vendor="${CSS.escape(beforeId)}"]`)?.closest("li")
+    : null;
+  if (target) target.before(slot);
+  else drag.list.append(slot); // insertion point outside the visible rows
   drag.slot = slot;
 }
 
@@ -644,23 +654,27 @@ function onHandlePointerUp(e) {
   window.removeEventListener("pointerup", onHandlePointerUp);
   window.removeEventListener("pointercancel", onHandlePointerUp);
   const el = drag.el;
+  const list = drag.list;
   drag.el = null;
   if (!drag.moved) return; // plain click on the handle — selects the row
   clearGhost();
   clearDropSlot();
   el.classList.remove("dragging");
-  const ids = state.records.map((r) => r.id);
-  const nextOrder = moveBefore(ids, drag.id, drag.beforeId);
+  const nextOrder = moveBefore(drag.allIds, drag.id, drag.beforeId);
   drag.suppressClick = true; // the click trailing a drag must not select
-  if (nextOrder.every((id, i) => id === ids[i])) {
-    renderList(); // nothing actually changed — restore
+  if (nextOrder.every((id, i) => id === drag.allIds[i])) {
+    if (list === $("record-list")) renderList();
+    else render(); // nothing actually changed — restore
     return;
   }
-  invoke("reorder_records", { ids: nextOrder })
+  const cmd = list === $("record-list") ? "reorder_records" : "reorder_vendors";
+  const args = list === $("record-list") ? { ids: nextOrder } : { vendors: nextOrder };
+  invoke(cmd, args)
     .then(applyView)
     .catch((err) => {
       showToast(String(err));
-      renderList(); // restore the pre-drag order
+      if (list === $("record-list")) renderList();
+      else render(); // restore the pre-drag order
     });
 }
 
@@ -709,9 +723,14 @@ function wireEvents() {
     render();
   });
 
-  // delegated rail clicks
+  // delegated rail clicks — a drag that just ended must not toggle the filter
   $("vendor-list").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-vendor]");
+    if (drag.suppressClick) {
+      drag.suppressClick = false;
+      return;
+    }
+    const li = e.target.closest("li");
+    const b = li?.querySelector("[data-vendor]");
     if (!b) return;
     state.vendor = state.vendor === b.dataset.vendor ? null : b.dataset.vendor;
     render();
@@ -744,6 +763,7 @@ function wireEvents() {
 
   // drag-to-reorder via pointer events (only the handle starts a drag)
   $("record-list").addEventListener("pointerdown", onHandlePointerDown);
+  $("vendor-list").addEventListener("pointerdown", onHandlePointerDown);
   document.addEventListener("mousedown", expireSuppress);
   document.addEventListener("keydown", expireSuppress);
 

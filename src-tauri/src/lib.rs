@@ -241,6 +241,23 @@ fn reorder_records(
     Ok(view_of(s.vault.as_ref().unwrap()))
 }
 
+/// Apply a new vendor display order. `vendors` must be a permutation of the
+/// current distinct vendor set; on any invalid list nothing is written.
+#[tauri::command]
+fn reorder_vendors(
+    state: tauri::State<AppState>,
+    vendors: Vec<String>,
+) -> Result<VaultView, String> {
+    let mut s = state.0.lock().unwrap();
+    s.vault
+        .as_mut()
+        .ok_or("没有打开的 vault")?
+        .reorder_vendors(&vendors)
+        .map_err(|e| e.to_string())?;
+    persist(&s)?;
+    Ok(view_of(s.vault.as_ref().unwrap()))
+}
+
 /// Return the vault history list from config.
 #[tauri::command]
 fn get_vault_history(app: tauri::AppHandle) -> Vec<VaultHistoryEntry> {
@@ -276,6 +293,7 @@ pub fn run() {
             update_record,
             delete_record,
             reorder_records,
+            reorder_vendors,
             get_vault_history,
             remove_vault_history,
         ])

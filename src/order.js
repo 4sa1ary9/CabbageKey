@@ -32,3 +32,17 @@ export function insertionSlot(rows, y) {
   }
   return null;
 }
+
+/**
+ * Next global id after `lastVisibleId` — the insertion point when a record
+ * is dropped below the last row of a filtered (vendor/tag/search) view.
+ * The dragged record must land right after that last visible record in the
+ * global order, not at the end of the whole vault. Returns null when
+ * `lastVisibleId` is unknown or already last.
+ */
+export function nextAfterId(ids, lastVisibleId) {
+  if (!lastVisibleId) return null;
+  const at = ids.indexOf(lastVisibleId);
+  if (at < 0 || at >= ids.length - 1) return null;
+  return ids[at + 1];
+}

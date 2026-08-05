@@ -352,6 +352,22 @@ a:focus-visible {
   font-size: 12px;
 }
 
+/* 厂商列表行: 按钮 + 拖拽手柄并排 */
+#vendor-list > li {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+#vendor-list .rail-item {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+#vendor-list .drag-handle {
+  flex: 0 0 auto;
+}
+
 /* 中列: 列表 */
 .list-col {
   border-right: 1px solid var(--border);

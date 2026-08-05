@@ -71,6 +71,11 @@ pub struct Vault {
     pub schema_version: u32,
     #[serde(default)]
     pub records: Vec<Record>,
+    /// Custom display order for the vendor rail. Vendors not listed here
+    /// (newly used ones, old vaults) sort lexicographically after listed ones.
+    /// Omitted from disk while empty so untouched vaults keep their format.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vendor_order: Vec<String>,
 }
 
 fn default_schema_version() -> u32 {
@@ -144,6 +149,7 @@ impl Vault {
         Vault {
             schema_version: VAULT_SCHEMA_VERSION,
             records: Vec::new(),
+            vendor_order: Vec::new(),
         }
     }
 
@@ -250,17 +256,45 @@ impl Vault {
         }
     }
 
-    /// All distinct vendors (non-empty), sorted — drives the left-rail groups.
+    /// Apply a new vendor order: `vendors` must be a permutation of the
+    /// current distinct vendor set. On any invalid list the vault is left
+    /// untouched — the caller must not persist in that case.
+    pub fn reorder_vendors(&mut self, vendors: &[String]) -> Result<(), VaultError> {
+        let mut incoming: Vec<&str> = vendors.iter().map(String::as_str).collect();
+        let current = self.vendors();
+        let mut existing: Vec<&str> = current.iter().map(String::as_str).collect();
+        incoming.sort_unstable();
+        existing.sort_unstable();
+        if incoming != existing {
+            return Err(VaultError::InvalidOrderList);
+        }
+        self.vendor_order = vendors.to_vec();
+        Ok(())
+    }
+
+    /// All distinct vendors (non-empty) in display order — custom `vendor_order`
+    /// first, then any others lexicographically. Drives the left-rail groups.
     pub fn vendors(&self) -> Vec<String> {
-        let mut v: Vec<String> = self
+        let mut distinct: Vec<String> = self
             .records
             .iter()
             .map(|r| r.vendor.clone())
             .filter(|s| !s.is_empty())
             .collect();
-        v.sort();
-        v.dedup();
-        v
+        distinct.sort();
+        distinct.dedup();
+        let mut out: Vec<String> = Vec::with_capacity(distinct.len());
+        for v in &self.vendor_order {
+            if distinct.contains(v) && !out.contains(v) {
+                out.push(v.clone());
+            }
+        }
+        for v in &distinct {
+            if !out.contains(v) {
+                out.push(v.clone());
+            }
+        }
+        out
     }
 
     /// All distinct tags, sorted — drives the tag filter.
@@ -413,6 +447,56 @@ mod tests {
     }
 
     #[test]
+    fn vendor_order_custom_then_lexicographic_rest() {
+        let mut v = Vault::new();
+        for (id, vendor) in [("a", "Zeta"), ("b", "Alpha"), ("c", "Beta"), ("d", "Zeta")] {
+            let mut i = input(id, "k");
+            i.vendor = vendor.into();
+            v.add(i, "t0".into()).unwrap();
+        }
+        // 未设置顺序 → 字典序
+        assert_eq!(v.vendors(), vec!["Alpha", "Beta", "Zeta"]);
+        // 设置自定义顺序 → 在前，未列出的按字典序补后
+        v.reorder_vendors(&["Zeta".into(), "Alpha".into(), "Beta".into()])
+            .unwrap();
+        assert_eq!(v.vendors(), vec!["Zeta", "Alpha", "Beta"]);
+    }
+
+    #[test]
+    fn reorder_vendors_rejects_bad_lists_without_mutation() {
+        let mut v = Vault::new();
+        for (id, vendor) in [("a", "Alpha"), ("b", "Beta")] {
+            let mut i = input(id, "k");
+            i.vendor = vendor.into();
+            v.add(i, "t0".into()).unwrap();
+        }
+        // 缺一个 / 多一个 / 含未知厂商 / 重复 → 全部拒绝且顺序不变
+        for bad in [
+            vec!["Alpha".into()],
+            vec!["Alpha".into(), "Beta".into(), "Gamma".into()],
+            vec!["Alpha".into(), "Nope".into()],
+            vec!["Alpha".into(), "Alpha".into()],
+        ] {
+            assert!(matches!(v.reorder_vendors(&bad), Err(VaultError::InvalidOrderList)));
+            assert_eq!(v.vendors(), vec!["Alpha", "Beta"]);
+        }
+    }
+
+    #[test]
+    fn vendor_order_survives_json_roundtrip() {
+        let mut v = Vault::new();
+        for (id, vendor) in [("a", "Alpha"), ("b", "Beta")] {
+            let mut i = input(id, "k");
+            i.vendor = vendor.into();
+            v.add(i, "t0".into()).unwrap();
+        }
+        v.reorder_vendors(&["Beta".into(), "Alpha".into()]).unwrap();
+        let back = Vault::from_json(&v.to_json()).unwrap();
+        assert_eq!(back.vendor_order, vec!["Beta", "Alpha"]);
+        assert_eq!(back.vendors(), vec!["Beta", "Alpha"]);
+    }
+
+    #[test]
     fn json_roundtrip() {
         let mut v = Vault::new();
         v.add(input("n", "k"), "t0".into()).unwrap();
@@ -500,6 +584,7 @@ mod tests {
                 created_at: "2026-08-01T10:00:00Z".into(),
                 updated_at: "2026-08-02T09:30:00Z".into(),
             }],
+            vendor_order: Vec::new(),
         };
         assert_eq!(built.to_json(), literal);
 
