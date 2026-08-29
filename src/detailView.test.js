@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildDetailBodyHtml, MASKED_API_KEY, formatTimestamp } from "./detailView.js";
+import { buildDetailBodyHtml, MASKED_API_KEY, formatTimestamp, revealButtonHtml } from "./detailView.js";
 
 const rec = {
   id: "1",
@@ -98,6 +98,22 @@ describe("detail meta timestamps", () => {
   it("formatTimestamp falls back to the raw value when unparseable", () => {
     expect(formatTimestamp("")).toBe("");
     expect(formatTimestamp("garbage")).toBe("garbage");
+  });
+});
+
+describe("reveal button", () => {
+  it("uses stroke SVG + text instead of emoji", () => {
+    const div = document.createElement("div");
+    div.innerHTML = buildDetailBodyHtml(rec);
+    const btn = div.querySelector("#reveal-btn");
+    expect(btn.querySelector("svg")).not.toBeNull();
+    expect(btn.textContent).toContain("显示");
+  });
+
+  it("masks → eye+显示, revealed → eye-off+隐藏", () => {
+    expect(revealButtonHtml(true)).toContain("显示");
+    expect(revealButtonHtml(false)).toContain("隐藏");
+    expect(revealButtonHtml(false)).not.toContain("显示");
   });
 });
 

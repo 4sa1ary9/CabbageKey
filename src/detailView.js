@@ -11,6 +11,15 @@ function field(label, value) {
   return `<div class="detail-field"><div class="label">${label}</div><div class="value">${value}</div></div>`;
 }
 
+// 👁/🙈 emoji 在不同 Windows 版本渲染粗细不一 — 揭示按钮用描边 SVG（currentColor）。
+const EYE_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.53 13.53 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/></svg>';
+
+/** Reveal 按钮内容：掩码态 eye+显示，明文态 eye-off+隐藏。 */
+export function revealButtonHtml(masked) {
+  return `${masked ? EYE_SVG : EYE_OFF_SVG}<span>${masked ? "显示" : "隐藏"}</span>`;
+}
+
 /** ISO UTC 字符串 → 本地时间显示；空值返回空串，无法解析时原样返回。 */
 export function formatTimestamp(iso) {
   if (!iso) return "";
@@ -47,7 +56,7 @@ export function buildDetailBodyHtml(rec) {
       <div class="label">api_key</div>
       <div class="value">
         <span class="secret" id="secret-val" data-masked="true">${MASKED_API_KEY}</span>
-        <button class="icon-btn" id="reveal-btn">👁 显示</button>
+        <button class="icon-btn" id="reveal-btn">${revealButtonHtml(true)}</button>
         <button class="icon-btn" id="copy-key">复制</button>
       </div>
     </div>

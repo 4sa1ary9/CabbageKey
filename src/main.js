@@ -19,7 +19,7 @@ import {
 } from "./formState.js";
 import { annotateHistoryEntries } from "./history.js";
 import { escapeHtml } from "./html.js";
-import { buildDetailBodyHtml, MASKED_API_KEY } from "./detailView.js";
+import { buildDetailBodyHtml, MASKED_API_KEY, revealButtonHtml } from "./detailView.js";
 import { moveBefore, insertionSlot, nextAfterId } from "./order.js";
 
 const CLIPBOARD_CLEAR_SECONDS = 30; // auto-clear window after copy
@@ -289,6 +289,15 @@ function render() {
   renderDetail();
 }
 
+/** 选中一条记录：只更新行高亮与详情面板（不整树重渲染）。 */
+function selectRecord(id) {
+  state.selectedId = id;
+  document.querySelectorAll("#record-list .record-item").forEach((el) => {
+    el.dataset.active = (el.dataset.id === id).toString();
+  });
+  renderDetail();
+}
+
 function renderRail() {
   $("count-all").textContent = state.records.length;
   $("filter-all").dataset.active = (!state.vendor && !state.tag).toString();
@@ -344,7 +353,7 @@ function renderList() {
         }" tabindex="0" role="button">
           <div class="record-main">
             <div class="record-name">${escapeHtml(r.name)}</div>
-            <div class="record-meta">${escapeHtml(r.vendor || "未分组")}${r.tags.length ? " · " + r.tags.map((t) => "#" + escapeHtml(t)).join(" ") : ""
+            <div class="record-meta">${escapeHtml(r.vendor || UNGROUPED)}${r.tags.length ? " · " + r.tags.map((t) => "#" + escapeHtml(t)).join(" ") : ""
         }</div>
           </div>
           <span class="drag-handle" title="按住拖拽排序"></span>
@@ -365,6 +374,30 @@ function renderEmptyState(kind) {
 }
 
 let revealTimer = null;
+
+// 明文显示到时自动回掩码（与剪贴板自动清空同一防护窗口）。
+function autoRemask() {
+  revealTimer = null;
+  const el = $("secret-val");
+  if (el && el.dataset.masked === "false") {
+    el.textContent = MASKED_API_KEY;
+    el.dataset.masked = "true";
+    const btn = $("reveal-btn");
+    if (btn) btn.innerHTML = revealButtonHtml(true);
+  }
+}
+
+// reveal 切换掩码/明文；显示后启动自动回掩码计时。
+function toggleReveal(rec) {
+  const el = $("secret-val");
+  const masked = el.dataset.masked === "true";
+  el.textContent = masked ? rec.api_key : MASKED_API_KEY;
+  el.dataset.masked = (!masked).toString();
+  $("reveal-btn").innerHTML = revealButtonHtml(!masked);
+  if (revealTimer) clearTimeout(revealTimer);
+  if (masked) revealTimer = setTimeout(autoRemask, REVEAL_AUTO_MASK_SECONDS * 1000);
+}
+
 function renderDetail() {
   const ph = $("detail-placeholder");
   const content = $("detail-content");
@@ -380,41 +413,7 @@ function renderDetail() {
   }
   ph.hidden = true;
   content.hidden = false;
-  content.innerHTML = buildDetailBodyHtml(rec);
-
-  // Per-URL copy buttons (delegated on the freshly rendered list)
-  $("detail-content").querySelector(".detail-url-list").addEventListener("click", (e) => {
-    const btn = e.target.closest(".copy-url");
-    if (!btn) return;
-    withCopied(btn, () => copyValue(btn.dataset.url));
-  });
-
-  // reveal toggles the masked key; showing it auto re-masks after a window
-  // (same protection window as the clipboard auto-clear)
-  $("reveal-btn").onclick = () => {
-    const el = $("secret-val");
-    const masked = el.dataset.masked === "true";
-    el.textContent = masked ? rec.api_key : MASKED_API_KEY;
-    el.dataset.masked = (!masked).toString();
-    $("reveal-btn").textContent = masked ? "🙈 隐藏" : "👁 显示";
-    if (revealTimer) clearTimeout(revealTimer);
-    if (masked) {
-      revealTimer = setTimeout(() => {
-        revealTimer = null;
-        const el2 = $("secret-val");
-        if (el2 && el2.dataset.masked === "false") {
-          el2.textContent = MASKED_API_KEY;
-          el2.dataset.masked = "true";
-          const btn = $("reveal-btn");
-          if (btn) btn.textContent = "👁 显示";
-        }
-      }, REVEAL_AUTO_MASK_SECONDS * 1000);
-    }
-  };
-  $("copy-key").onclick = () => withCopied($("copy-key"), () => copyValue(rec.api_key));
-  $("edit-btn").onclick = () => openForm(rec);
-  $("duplicate-btn").onclick = () => openDuplicateForm(rec);
-  $("delete-btn").onclick = () => onDelete(rec);
+  content.innerHTML = buildDetailBodyHtml(rec); // 事件一次性委托在 wireEvents
 }
 
 async function withCopied(btn, fn) {
@@ -429,8 +428,9 @@ async function withCopied(btn, fn) {
 }
 
 // ---------------- Form (add / edit) ----------------
-// formState = { endpoints } — mutated only by pure functions from formState.js;
-// URL input rows mirror endpoints live via the "input" listener below.
+// formState = { endpoints } — mutated by pure functions from formState.js, plus
+// one live-sync exception: the URL-row "input" handler below writes the typed
+// value in place so lit/gray toggle states mirror typing without a re-render.
 let formState = openRecordFormState(null);
 
 // Toggle buttons mirror formState.endpoints: lit = active with URL,
@@ -835,7 +835,8 @@ function wireEvents() {
     render();
   });
 
-  // delegated record selection (click + keyboard)
+  // delegated record selection (click + keyboard)。选中只更新行高亮 + 详情，
+  // 不整树重渲染 — 保住列表滚动位置与键盘焦点。
   const selectFrom = (e) => {
     if (drag.suppressClick) {
       drag.suppressClick = false; // a real drag just ended — not a click
@@ -843,8 +844,7 @@ function wireEvents() {
     }
     const item = e.target.closest("[data-id]");
     if (!item) return;
-    state.selectedId = item.dataset.id;
-    render();
+    selectRecord(item.dataset.id);
   };
   $("record-list").addEventListener("click", selectFrom);
   $("record-list").addEventListener("keydown", (e) => {
@@ -852,6 +852,25 @@ function wireEvents() {
       e.preventDefault();
       selectFrom(e);
     }
+  });
+
+  // 详情面板事件：一次性委托在容器上，renderDetail 重渲染无需重挂监听。
+  $("detail-content").addEventListener("click", (e) => {
+    const rec = state.records.find((r) => r.id === state.selectedId);
+    if (!rec) return;
+    const copyUrl = e.target.closest(".copy-url");
+    if (copyUrl) {
+      withCopied(copyUrl, () => copyValue(copyUrl.dataset.url));
+      return;
+    }
+    if (e.target.closest("#reveal-btn")) {
+      toggleReveal(rec);
+      return;
+    }
+    if (e.target.closest("#copy-key")) withCopied($("copy-key"), () => copyValue(rec.api_key));
+    else if (e.target.closest("#edit-btn")) openForm(rec);
+    else if (e.target.closest("#duplicate-btn")) openDuplicateForm(rec);
+    else if (e.target.closest("#delete-btn")) onDelete(rec);
   });
 
   // drag-to-reorder via pointer events (only the handle starts a drag)

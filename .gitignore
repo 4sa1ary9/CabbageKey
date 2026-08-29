@@ -17,6 +17,10 @@ Thumbs.db
 .idea/
 *.swp
 
+# Agent tooling / local artifacts
+.kiro/
+.playwright-mcp/
+
 # Vault data must never be committed (defensive — users pick their own path,
 # but guard against accidental local test vaults living in-repo)
 *.vault
