@@ -97,6 +97,7 @@ export INCLUDE="$MSVC/include:$SDK/Include/10.0.26100.0/ucrt:$SDK/Include/10.0.2
 
 - `src-tauri/src/vault.rs` — 记录 schema（name*/api_key* 必填，vendor/endpoints/website/note/tags 可选，uuid 主键）、CRUD、必填校验、原子写、**明文格式 golden test**、历史列表管理（`VaultHistoryEntry` / `add_vault_history_entry`）。
 - `src-tauri/src/lib.rs` — Tauri 命令层 + 会话态（只有当前 vault + 路径，无任何凭据）。命令：`startup_info` / `vault_exists` / `create_vault` / `open_vault` / `close_vault` / `add_record` / `update_record` / `delete_record` / `reorder_records` / `reorder_vendors` / `get_vault_history` / `remove_vault_history`。config 只存 `last_path` + `vault_history`，写盘走原子写。
+- `src/api.js` — 前端 ↔ Tauri 命令层的唯一 seam（12 个命令函数；命令名与参数形状只此一处，错误字符串原样穿透，展示方式由调用方决定），已单测。
 - `src/filter.js` — 纯检索逻辑（搜索/厂商/标签叠加），已单测。
 - `src/vendorPresets.js` — 内置 AI 厂商预设数据 + 工具函数（getPreset/getSupportedStandards/getEndpointUrl/normalizeUrl/getStandardLabel）。
 - `src/formState.js` — 表单状态机（预设联动、接口规范 toggle、提交载荷构建/校验），已单测。
@@ -110,5 +111,5 @@ export INCLUDE="$MSVC/include:$SDK/Include/10.0.26100.0/ucrt:$SDK/Include/10.0.2
 ## 测试
 
 - `cd src-tauri && cargo test` — 后端 30 测试（vault CRUD + 顺序/重排 + golden test + 历史，需先导出构建环境变量或用 `build.ps1`）
-- `bun run test` — 前端 96 测试（filter 16 + vendorPresets 19 + formState 21 + detailView 13 + order 16 + vendorDropdown 7 + history 4）
+- `bun run test` — 前端 110 测试（filter 16 + vendorPresets 19 + formState 21 + detailView 13 + order 16 + vendorDropdown 7 + history 4 + api 14）
 - 人工端到端走查：见 `docs/TEST-PLAN.md` 的人工清单（直进主界面 → 增 → 搜 → 复制 → 改 → 删 → 整个数据文件夹拷到另一路径直接打开使用）。

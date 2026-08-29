@@ -1,8 +1,9 @@
 // KeyVault frontend controller — thin DOM shell. Wires the vault chooser +
-// three-pane UI to Tauri commands. Testable business logic lives in
+// three-pane UI to the Tauri command layer through api.js (the single invoke
+// seam). Testable business logic lives in
 // filter.js / vendorPresets.js / formState.js / history.js / order.js
 // (unit-tested); this file is event wiring + rendering glue.
-import { invoke } from "@tauri-apps/api/core";
+import * as api from "./api.js";
 import { writeText, readText, clear as clearClipboard } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openDialog, save as saveDialog, message, ask } from "@tauri-apps/plugin-dialog";
 import { filterRecords, groupByVendor, emptyStateKind, UNGROUPED, vendorFilterValid, tagFilterValid } from "./filter.js";
@@ -44,7 +45,7 @@ async function openVault(path) {
   const err = $("vault-error");
   err.textContent = "";
   try {
-    applyView(await invoke("open_vault", { path }));
+    applyView(await api.openVault(path));
     enterApp();
   } catch (e) {
     err.textContent = String(e);
@@ -55,7 +56,7 @@ async function createVault(path) {
   const err = $("vault-error");
   err.textContent = "";
   try {
-    applyView(await invoke("create_vault", { path }));
+    applyView(await api.createVault(path));
     enterApp();
   } catch (e) {
     err.textContent = String(e);
@@ -74,7 +75,7 @@ async function renderVaultHistory() {
   const ul = $("vault-history-list");
   let entries = [];
   try {
-    entries = await invoke("get_vault_history");
+    entries = await api.getVaultHistory();
   } catch (_) {
     // No history available — leave the list empty.
   }
@@ -84,7 +85,7 @@ async function renderVaultHistory() {
   }
   // Check file existence for each entry in parallel (drives the 置灰 state).
   const existsList = await Promise.all(
-    entries.map((e) => invoke("vault_exists", { path: e.path }).catch(() => false))
+    entries.map((e) => api.vaultExists(e.path).catch(() => false))
   );
   ul.innerHTML = annotateHistoryEntries(entries, existsList)
     .map((entry) => {
@@ -112,7 +113,7 @@ function enterApp() {
 // chooser, where another vault can be opened or created — still no password.
 async function onSwitchVault() {
   try {
-    await invoke("close_vault");
+    await api.closeVault();
   } catch (_) { }
   state.records = [];
   state.vendors = [];
@@ -141,9 +142,9 @@ async function onCreateNew() {
 // If the remembered file is gone, show the chooser with a hint.
 async function initVaultScreen() {
   try {
-    const info = await invoke("startup_info");
+    const info = await api.startupInfo();
     if (info.last_path) {
-      if (await invoke("vault_exists", { path: info.last_path })) {
+      if (await api.vaultExists(info.last_path)) {
         openVault(info.last_path);
         return;
       }
@@ -603,9 +604,9 @@ async function onFormSubmit(e) {
   submitting = true;
   $("form-save").disabled = true;
   try {
-    const cmd = state.editingId ? "update_record" : "add_record";
-    const args = state.editingId ? { id: state.editingId, input } : { input };
-    const view = await invoke(cmd, args);
+    const view = state.editingId
+      ? await api.updateRecord(state.editingId, input)
+      : await api.addRecord(input);
     applyView(view);
     $("record-dialog").close();
   } catch (err2) {
@@ -625,7 +626,7 @@ async function onDelete(rec) {
   });
   if (!ok) return;
   try {
-    const view = await invoke("delete_record", { id: rec.id });
+    const view = await api.deleteRecord(rec.id);
     if (state.selectedId === rec.id) state.selectedId = null;
     applyView(view);
   } catch (e) {
@@ -759,9 +760,10 @@ function onHandlePointerUp(e) {
     else render(); // nothing actually changed — restore
     return;
   }
-  const cmd = list === $("record-list") ? "reorder_records" : "reorder_vendors";
-  const args = list === $("record-list") ? { ids: nextOrder } : { vendors: nextOrder };
-  invoke(cmd, args)
+  const commit = list === $("record-list")
+    ? api.reorderRecords(nextOrder)
+    : api.reorderVendors(nextOrder);
+  commit
     .then(applyView)
     .catch((err) => {
       showToast(String(err));
@@ -789,7 +791,7 @@ function wireEvents() {
     if (removeBtn) {
       e.stopPropagation();
       try {
-        await invoke("remove_vault_history", { path: removeBtn.dataset.removePath });
+        await api.removeVaultHistory(removeBtn.dataset.removePath);
       } catch (_) { }
       renderVaultHistory();
       return;
