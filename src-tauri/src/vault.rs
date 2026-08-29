@@ -800,4 +800,31 @@ mod tests {
         assert_eq!(h[0].display_name, "C:\\");
         assert_eq!(h[1].display_name, "keys.json");
     }
+
+    #[test]
+    fn atomic_write_creates_file_and_leaves_no_tmp() {
+        let dir = std::env::temp_dir().join(format!("keyvault-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("vault.json");
+
+        atomic_write(&path, b"first").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+        // tmp 已改名交付，不留残留（残留会误导下一次写入/排查）。
+        assert!(!path.with_extension("tmp").exists());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn atomic_write_overwrites_existing_file() {
+        let dir = std::env::temp_dir().join(format!("keyvault-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("vault.json");
+        std::fs::write(&path, b"old").unwrap();
+
+        atomic_write(&path, b"new").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

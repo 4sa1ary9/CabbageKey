@@ -43,6 +43,13 @@ export function toggleStandard(state, std, presetUrl) {
   return createFormState(endpoints);
 }
 
+/** Per-standard endpoint status — the single source the form's lit/gray
+ *  toggle lamps and the detail panel's supported/gray states both derive
+ *  from. declared = standard toggled on; hasUrl = it carries a URL. */
+export function endpointState(endpoints, std) {
+  return { declared: std in endpoints, hasUrl: Boolean(endpoints[std]) };
+}
+
 /** Trim endpoint URL values (keys are kept — matches previous submit behavior). */
 export function trimEndpointUrls(endpoints) {
   const out = {};

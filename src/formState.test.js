@@ -9,6 +9,7 @@ import {
   buildRecordInput,
   validateRecordInput,
   duplicateName,
+  endpointState,
 } from "./formState.js";
 
 describe("applyVendorPreset", () => {
@@ -158,5 +159,25 @@ describe("duplicateName", () => {
 
   it("repeats the suffix for repeated copies (not unique)", () => {
     expect(duplicateName("翻译用_copy")).toBe("翻译用_copy_copy");
+  });
+});
+
+describe("endpointState", () => {
+  it("inactive standard: not declared, no URL", () => {
+    expect(endpointState({}, "openai-chat")).toEqual({ declared: false, hasUrl: false });
+  });
+
+  it("declared without URL (gray lamp)", () => {
+    expect(endpointState({ "openai-chat": "" }, "openai-chat")).toEqual({
+      declared: true,
+      hasUrl: false,
+    });
+  });
+
+  it("declared with URL (lit lamp)", () => {
+    expect(endpointState({ "openai-chat": "https://x" }, "openai-chat")).toEqual({
+      declared: true,
+      hasUrl: true,
+    });
   });
 });

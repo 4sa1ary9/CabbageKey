@@ -5,18 +5,28 @@
 /**
  * Move `fromId` in `ids` so it lands immediately before `beforeId`
  * (`null` = end of the list). No-op when either id is unknown or the
- * element is already in place. Returns a new array, never mutates `ids`.
+ * element is already in place. Returns `{ order, changed }` — a new array
+ * (never mutating `ids`) plus whether anything actually moved, so callers
+ * don't have to detect no-ops by comparing arrays.
  */
 export function moveBefore(ids, fromId, beforeId) {
-  if (fromId === beforeId) return [...ids];
-  if (!ids.includes(fromId)) return [...ids];
-  if (beforeId !== null && !ids.includes(beforeId)) return [...ids];
-  const rest = ids.filter((id) => id !== fromId);
-  if (beforeId === null) return [...rest, fromId];
-  const at = rest.indexOf(beforeId);
-  const out = [...rest];
-  out.splice(at, 0, fromId);
-  return out;
+  const unchanged =
+    fromId === beforeId ||
+    !ids.includes(fromId) ||
+    (beforeId !== null && !ids.includes(beforeId));
+  let order;
+  if (unchanged) {
+    order = [...ids];
+  } else {
+    const rest = ids.filter((id) => id !== fromId);
+    if (beforeId === null) {
+      order = [...rest, fromId];
+    } else {
+      order = [...rest];
+      order.splice(rest.indexOf(beforeId), 0, fromId);
+    }
+  }
+  return { order, changed: order.some((v, i) => v !== ids[i]) };
 }
 
 /**
@@ -45,4 +55,19 @@ export function nextAfterId(ids, lastVisibleId) {
   const at = ids.indexOf(lastVisibleId);
   if (at < 0 || at >= ids.length - 1) return null;
   return ids[at + 1];
+}
+
+/**
+ * The drop decision for one pointermove: the insertion slot from geometry,
+ * plus the record-list strategy for a drop below the last visible row — the
+ * record lands right after that row in the GLOBAL order (in a filtered view
+ * that is not the vault's end). Vendor lists have no such correction: null
+ * stays null (= append at end). `listKind` names the two list policies;
+ * this rule used to live split across the drop handler and is pure — and
+ * tested — as a whole now.
+ */
+export function dropTarget({ allIds, geometry, clientY, listKind, lastVisibleId = null }) {
+  const beforeId = insertionSlot(geometry, clientY);
+  if (beforeId !== null || listKind !== "records") return beforeId;
+  return nextAfterId(allIds, lastVisibleId);
 }

@@ -22,6 +22,10 @@
 - 搜索/揭示图标与按钮从 emoji 换成描边 SVG；应用图标从纯色占位换成品牌图标（青绿渐变 + 钥匙孔）。
 - 详情面板事件改为一次性委托、选中记录不再整树重渲染（保住滚动位置与焦点）。
 - 前端与命令层之间立起唯一 seam `src/api.js`：12 个命令的名称与参数形状收敛到一处，main.js 不再直接 invoke；wire contract 由 14 条新测试冻结。
+- 表单对话框生命周期收拢为 `src/formSession.js`：新增/编辑/快加/复制折叠为单一 open 协议，未保存守卫、双击防抖、厂商切换确认/回滚首次可单测（jsdom 协议测试）；"已确认厂商"不再跨 combobox/表单/回滚三层共用；lit/gray 规则收敛到 formState 的 endpointState 单一来源（表单与详情面板共用）。
+- 列表状态收敛为 `src/listModel.js` 视图模型：筛选目标失效复位、选中记录失效清理、hasActiveFilter、"未分组"键与左栏合成项（filter.js 的 railVendorGroups）等不变量有了唯一主人；main.js 的 4 个渲染入口收敛为一张"变更面 → 刷新范围"映射表。
+- 拖拽落点决策整体渡过 seam：筛选视图的落点回退规则收进 order.js 的 dropTarget（与几何插槽一并全纯可测），moveBefore 返回 {order, changed} 让调用点的深比较探测消失；main.js 拖拽段 5 处列表类型判定收敛为一次 kind 判定，修正了"筛选时禁拖"的过期注释（实际行为：筛选态可拖）。
+- Rust 侧收拢：五个变更命令折叠为 with_vault_mut 单一协议（lock → 判开 → 变更 → persist → view）；唯二未测的后端纯逻辑补齐测试——now_iso 拆出 iso_from_unix 纯核（历法锚点向量锁定闰日与 2100 非闰边界）、atomic_write（创建/覆盖/无 tmp 残留）；history.js 深化为 enrichHistory 拥有并行存在性探测契约（错误/缺失当失效，existsFn 注入可测）。
 
 ## [0.3.0] — 2026-08-04
 

@@ -1,42 +1,38 @@
 // KeyVault frontend controller — thin DOM shell. Wires the vault chooser +
 // three-pane UI to the Tauri command layer through api.js (the single invoke
 // seam). Testable business logic lives in
-// filter.js / vendorPresets.js / formState.js / history.js / order.js
+// api.js / filter.js / formState.js / formSession.js / history.js / listModel.js / order.js
 // (unit-tested); this file is event wiring + rendering glue.
 import * as api from "./api.js";
 import { writeText, readText, clear as clearClipboard } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openDialog, save as saveDialog, message, ask } from "@tauri-apps/plugin-dialog";
-import { filterRecords, groupByVendor, emptyStateKind, UNGROUPED, vendorFilterValid, tagFilterValid } from "./filter.js";
-import { getEndpointUrl, getStandardLabel, ALL_STANDARDS } from "./vendorPresets.js";
+import { emptyStateKind, vendorKey, railVendorGroups, isUngroupedKey } from "./filter.js";
 import { vendorCandidates, filterVendorCandidates } from "./vendorDropdown.js";
-import {
-  openRecordFormState,
-  applyVendorPreset,
-  backfillPresetEndpoints,
-  toggleStandard,
-  buildRecordInput,
-  validateRecordInput,
-  duplicateName,
-} from "./formState.js";
-import { annotateHistoryEntries } from "./history.js";
+import { enrichHistory } from "./history.js";
 import { escapeHtml } from "./html.js";
 import { buildDetailBodyHtml, MASKED_API_KEY, revealButtonHtml } from "./detailView.js";
-import { moveBefore, insertionSlot, nextAfterId } from "./order.js";
+import { dropTarget, moveBefore } from "./order.js";
+import { createFormSession } from "./formSession.js";
+import { createListModel } from "./listModel.js";
 
 const CLIPBOARD_CLEAR_SECONDS = 30; // auto-clear window after copy
 const REVEAL_AUTO_MASK_SECONDS = 30; // 明文 key 显示多久后自动回掩码
 
-// ---- session-ish UI state ----
-const state = {
-  records: [],
-  vendors: [],
-  tags: [],
-  query: "",
-  vendor: null,
-  tag: null,
-  selectedId: null,
-  editingId: null,
-};
+// ---- list pane state: the model owns records/filters/selection and their
+// invariants (a filter's target exists, a selection points at a record);
+// mutations report change aspects and the mapping below is the ONE place
+// that knows which aspect repaints which DOM (granular renders preserve
+// list scroll position and keyboard focus).
+const listModel = createListModel();
+const state = listModel.state; // live read-only view — writes go through listModel
+
+listModel.subscribe((ch) => {
+  if (ch.records) populatePurposeDatalist();
+  if (ch.records || ch.filter) renderRail();
+  if (ch.records || ch.filter || ch.query) renderList();
+  if (ch.records || ch.filter || ch.selection) renderDetail();
+  if (ch.selection) updateRowHighlight();
+});
 
 const $ = (id) => document.getElementById(id);
 
@@ -45,7 +41,7 @@ async function openVault(path) {
   const err = $("vault-error");
   err.textContent = "";
   try {
-    applyView(await api.openVault(path));
+    listModel.setRecords(await api.openVault(path));
     enterApp();
   } catch (e) {
     err.textContent = String(e);
@@ -56,7 +52,7 @@ async function createVault(path) {
   const err = $("vault-error");
   err.textContent = "";
   try {
-    applyView(await api.createVault(path));
+    listModel.setRecords(await api.createVault(path));
     enterApp();
   } catch (e) {
     err.textContent = String(e);
@@ -83,11 +79,8 @@ async function renderVaultHistory() {
     ul.innerHTML = "";
     return;
   }
-  // Check file existence for each entry in parallel (drives the 置灰 state).
-  const existsList = await Promise.all(
-    entries.map((e) => api.vaultExists(e.path).catch(() => false))
-  );
-  ul.innerHTML = annotateHistoryEntries(entries, existsList)
+  // 并行探测每个条目的文件存在性（驱动置灰态）与顺序对齐在 history.js 里。
+  ul.innerHTML = (await enrichHistory(entries, api.vaultExists))
     .map((entry) => {
       const missingClass = entry.exists ? "" : " vault-history-missing";
       const missingLabel = entry.exists ? "" : '<span class="vault-history-gone">文件不存在</span>';
@@ -115,14 +108,7 @@ async function onSwitchVault() {
   try {
     await api.closeVault();
   } catch (_) { }
-  state.records = [];
-  state.vendors = [];
-  state.tags = [];
-  state.query = "";
-  state.vendor = null;
-  state.tag = null;
-  state.selectedId = null;
-  state.editingId = null;
+  listModel.reset();
   $("search").value = "";
   $("vault-error").textContent = "";
   showVaultScreen();
@@ -184,20 +170,21 @@ function showToast(msg) {
   toastTimer = setTimeout(() => (t.hidden = true), 2500);
 }
 
-// placeholder-render-and-events
-function applyView(view) {
-  state.records = view.records;
-  state.vendors = view.vendors;
-  state.tags = view.tags;
-  // 筛选目标消失（如该厂商最后一条记录被删/改走）时复位筛选，
-  // 不留"无结果空态 + 左栏无高亮"的死路。
-  if (!vendorFilterValid(state.vendor, state.records, state.vendors)) state.vendor = null;
-  if (!tagFilterValid(state.tag, state.tags)) state.tag = null;
-  if (state.selectedId && !state.records.find((r) => r.id === state.selectedId)) {
-    state.selectedId = null;
-  }
-  populatePurposeDatalist();
-  render();
+// ---------------- Rendering ----------------
+// Explicit repaint for paths that change no state (drag restore after a
+// no-op or a failed command); state changes go through listModel's aspects.
+function render() {
+  renderRail();
+  renderList();
+  renderDetail();
+}
+
+/** 选中行高亮：不整树重渲染 — 保住列表滚动位置与键盘焦点。 */
+function updateRowHighlight() {
+  const id = state.selectedId;
+  document.querySelectorAll("#record-list .record-item").forEach((el) => {
+    el.dataset.active = (el.dataset.id === id).toString();
+  });
 }
 
 // Purpose candidates: distinct usage names in this vault, sorted.
@@ -209,8 +196,9 @@ function populatePurposeDatalist() {
 }
 
 // ---------------- Vendor dropdown (custom combobox) ----------------
-// vendorDd = { open, highlighted, list, applied } — UI state for #f-vendor.
-const vendorDd = { open: false, highlighted: -1, list: [], applied: "" };
+// vendorDd = { open, highlighted, list } — combobox view state. The committed
+// vendor value (applied) lives in the form session.
+const vendorDd = { open: false, highlighted: -1, list: [] };
 
 function openVendorPanel() {
   vendorDd.open = true;
@@ -238,10 +226,11 @@ function renderVendorPanel() {
     .join("");
 }
 
-/** Set the vendor value and trigger the existing auto-fill rule. */
+/** Set the vendor value and trigger the auto-fill rule. `force` re-applies
+ *  even when the value equals the applied vendor (preset reset on re-pick). */
 function applyVendor(name) {
   $("f-vendor").value = name;
-  onVendorChange();
+  formSession.setVendor(name, { force: true });
   closeVendorPanel();
 }
 
@@ -275,49 +264,19 @@ function onVendorKeydown(e) {
   }
 }
 
-// ---------------- Rendering ----------------
-function visibleRecords() {
-  return filterRecords(state.records, {
-    query: state.query,
-    vendor: state.vendor,
-    tag: state.tag,
-  });
-}
-
-function render() {
-  renderRail();
-  renderList();
-  renderDetail();
-}
-
-/** 选中一条记录：只更新行高亮与详情面板（不整树重渲染）。 */
-function selectRecord(id) {
-  state.selectedId = id;
-  document.querySelectorAll("#record-list .record-item").forEach((el) => {
-    el.dataset.active = (el.dataset.id === id).toString();
-  });
-  renderDetail();
-}
-
 function renderRail() {
   $("count-all").textContent = state.records.length;
   $("filter-all").dataset.active = (!state.vendor && !state.tag).toString();
 
-  const groups = groupByVendor(state.records);
-  let vendorHtml = state.vendors
+  // 合成"未分组"项的判定与计数在 filter.js 的 railVendorGroups 里；
+  // 无拖拽手柄 — 非真实厂商，不参与 reorder 持久化。
+  $("vendor-list").innerHTML = railVendorGroups(state.records, state.vendors)
     .map(
-      (v) =>
-        `<li><button class="rail-item" data-vendor="${escapeHtml(v)}" data-active="${state.vendor === v
-        }">${escapeHtml(v)} <span class="count">${groups[v] || 0}</span></button><span class="drag-handle" title="按住拖拽排序"></span></li>`
+      (g) =>
+        `<li><button class="rail-item" data-vendor="${escapeHtml(g.key)}" data-active="${state.vendor === g.key
+        }">${escapeHtml(g.key)} <span class="count">${g.count}</span></button>${g.draggable ? '<span class="drag-handle" title="按住拖拽排序"></span>' : ""}</li>`
     )
     .join("");
-  // 合成"未分组"项：确有无厂商记录且没有同名真实厂商时才出现；
-  // 无拖拽手柄 — 非真实厂商，不参与 reorder 持久化。
-  const ungroupedCount = state.records.filter((r) => !(r.vendor && r.vendor.trim())).length;
-  if (ungroupedCount && !state.vendors.includes(UNGROUPED)) {
-    vendorHtml += `<li><button class="rail-item" data-vendor="${UNGROUPED}" data-active="${state.vendor === UNGROUPED}">未分组 <span class="count">${ungroupedCount}</span></button></li>`;
-  }
-  $("vendor-list").innerHTML = vendorHtml;
 
   $("tag-list").innerHTML = state.tags
     .map(
@@ -329,15 +288,14 @@ function renderRail() {
 }
 
 function renderList() {
-  const list = visibleRecords();
+  const list = listModel.visibleRecords();
   const ul = $("record-list");
   const empty = $("empty-state");
-  const hasActiveFilter = !!(state.query || state.vendor || state.tag);
 
   const kind = emptyStateKind({
     totalRecords: state.records.length,
     visibleRecords: list.length,
-    hasActiveFilter,
+    hasActiveFilter: listModel.hasActiveFilter(),
   });
 
   if (kind) {
@@ -354,7 +312,7 @@ function renderList() {
         }" tabindex="0" role="button">
           <div class="record-main">
             <div class="record-name">${escapeHtml(r.name)}</div>
-            <div class="record-meta">${escapeHtml(r.vendor || UNGROUPED)}${r.tags.length ? " · " + r.tags.map((t) => "#" + escapeHtml(t)).join(" ") : ""
+            <div class="record-meta">${escapeHtml(vendorKey(r.vendor))}${r.tags.length ? " · " + r.tags.map((t) => "#" + escapeHtml(t)).join(" ") : ""
         }</div>
           </div>
           <span class="drag-handle" title="按住拖拽排序"></span>
@@ -428,194 +386,47 @@ async function withCopied(btn, fn) {
   }, 1500);
 }
 
-// ---------------- Form (add / edit) ----------------
-// formState = { endpoints } — mutated by pure functions from formState.js, plus
-// one live-sync exception: the URL-row "input" handler below writes the typed
-// value in place so lit/gray toggle states mirror typing without a re-render.
-let formState = openRecordFormState(null);
+// ---------------- Form session (add / edit dialog) ----------------
+// The dialog lifecycle (field filling, endpoint state, dirty guard, vendor
+// switch confirm/rollback, submit protocol) lives in formSession.js; the
+// element handles it owns are injected here, the DOM events wired below.
+const els = {
+  name: $("f-name"),
+  key: $("f-key"),
+  vendor: $("f-vendor"),
+  website: $("f-website"),
+  tags: $("f-tags"),
+  note: $("f-note"),
+  error: $("form-error"),
+  save: $("form-save"),
+  dialog: $("record-dialog"),
+  title: $("dialog-title"),
+  stdGroup: $("f-standards-group"),
+  urlSection: $("f-url-section"),
+  urlRows: $("f-url-rows"),
+};
 
-// Toggle buttons mirror formState.endpoints: lit = active with URL,
-// gray = active but URL empty, plain = inactive.
-function syncStdToggles() {
-  $("f-standards-group").querySelectorAll(".std-toggle").forEach((btn) => {
-    const std = btn.dataset.std;
-    const active = std in formState.endpoints;
-    const hasUrl = !!formState.endpoints[std];
-    btn.dataset.active = (active && hasUrl).toString();
-    btn.dataset.gray = (active && !hasUrl).toString();
-  });
-}
-
-// One URL input row per active standard; nothing shown when none active.
-function renderUrlRows() {
-  const stds = ALL_STANDARDS.filter((s) => s in formState.endpoints);
-  $("f-url-section").hidden = !stds.length;
-  $("f-url-rows").innerHTML = stds
-    .map(
-      (std) => `<div class="url-row" data-std="${std}">
-      <span class="url-row-label">${escapeHtml(getStandardLabel(std))}</span>
-      <input class="url-row-input" type="text" autocomplete="off" value="${escapeHtml(formState.endpoints[std])}" />
-    </div>`
-    )
-    .join("");
-}
-
-// Shared field filling for the add/edit dialog. `fields` may be a record
-// (edit mode) or a plain prefill object (quick add / duplicate); missing
-// keys become empty values.
-function fillFormFields(fields) {
-  $("f-name").value = fields.name || "";
-  $("f-key").value = fields.api_key || "";
-  $("f-vendor").value = fields.vendor || "";
-  vendorDd.highlighted = -1;
-  vendorDd.applied = fields.vendor || "";
-  closeVendorPanel();
-  $("f-website").value = fields.website || "";
-  $("f-tags").value = (fields.tags || []).join(", ");
-  $("f-note").value = fields.note || "";
-  $("form-error").textContent = "";
-}
-
-// 打开时的字段快照 — 供关闭守卫判断"有未保存的修改"。
-function snapshotForm() {
-  return JSON.stringify({
-    name: $("f-name").value,
-    key: $("f-key").value,
-    vendor: $("f-vendor").value,
-    website: $("f-website").value,
-    tags: $("f-tags").value,
-    note: $("f-note").value,
-    endpoints: formState.endpoints,
-  });
-}
-
-let formSnapshot = "";
-
-/** Close the dialog, confirming first when there are unsaved edits.
- *  Backdrop click / Esc route here; the explicit 取消 button closes directly. */
-async function guardedCloseDialog() {
-  if (snapshotForm() !== formSnapshot) {
-    const ok = await ask("表单有未保存的修改，确定丢弃吗？", {
+const formSession = createFormSession(els, {
+  api,
+  confirmDiscard: () =>
+    ask("表单有未保存的修改，确定丢弃吗？", {
       title: "关闭表单",
       kind: "warning",
       okLabel: "丢弃",
       cancelLabel: "继续编辑",
-    });
-    if (!ok) return;
-  }
-  $("record-dialog").close();
-}
-
-// Sync toggles + URL rows, then open the dialog and focus the name field.
-function showRecordDialog() {
-  syncStdToggles();
-  renderUrlRows();
-  formSnapshot = snapshotForm();
-  $("record-dialog").showModal();
-  $("f-name").focus();
-}
-
-function openForm(rec) {
-  state.editingId = rec ? rec.id : null;
-  $("dialog-title").textContent = rec ? "编辑密钥" : "新增密钥";
-  fillFormFields(rec || {});
-  // Backfill preset URLs for standards the record is missing (never overwrites).
-  const st = openRecordFormState(rec);
-  formState = { endpoints: backfillPresetEndpoints(st.endpoints, rec ? rec.vendor : "") };
-  showRecordDialog();
-}
-
-// Quick add with the rail's vendor filter pre-applied: preset vendors get
-// their website + endpoint URLs, custom vendors just the name — the same
-// auto-fill rule as typing the vendor into the form manually.
-function openAddWithVendor(vendor) {
-  state.editingId = null;
-  $("dialog-title").textContent = "新增密钥";
-  formState = applyVendorPreset(vendor);
-  fillFormFields({ vendor, website: formState.website });
-  showRecordDialog();
-}
-
-// Duplicate add: every field copied from the source record with the name
-// suffixed "_copy". No preset backfill — the copy mirrors the record's
-// endpoint URLs exactly, and the suffix may repeat across copies.
-function openDuplicateForm(rec) {
-  state.editingId = null;
-  $("dialog-title").textContent = "新增密钥";
-  fillFormFields({ ...rec, name: duplicateName(rec.name) });
-  formState = openRecordFormState(rec);
-  showRecordDialog();
-}
-
-/** Vendor input change: full-replace website + standards from the preset.
- *  当表单里已有非空端点 URL 时先确认 — 全量替换（自定义厂商则清空）是破坏性的。 */
-async function onVendorChange() {
-  const vendor = $("f-vendor").value;
-  const preset = applyVendorPreset(vendor);
-  if (Object.values(formState.endpoints).some((url) => url && url.trim())) {
-    const ok = await ask("切换厂商会替换官网并重新填充端点 URL，已填内容将被覆盖，继续吗？", {
+    }),
+  confirmVendorSwitch: () =>
+    ask("切换厂商会替换官网并重新填充端点 URL，已填内容将被覆盖，继续吗？", {
       title: "切换厂商",
       kind: "warning",
       okLabel: "继续",
       cancelLabel: "取消",
-    });
-    if (!ok) {
-      $("f-vendor").value = vendorDd.applied; // 回退到切换前的厂商
-      return;
-    }
-  }
-  vendorDd.applied = vendor;
-  formState = preset;
-  $("f-website").value = preset.website;
-  syncStdToggles();
-  renderUrlRows();
-}
-
-/** Click a standard: one click toggles it on (with preset URL) or off. */
-function onStdGroupClick(e) {
-  const btn = e.target.closest("[data-std]");
-  if (!btn) return;
-  const std = btn.dataset.std;
-  const presetUrl = getEndpointUrl($("f-vendor").value, std);
-  formState = toggleStandard(formState, std, presetUrl);
-  syncStdToggles();
-  renderUrlRows();
-}
-
-let submitting = false;
-async function onFormSubmit(e) {
-  e.preventDefault();
-  if (submitting) return; // 命令在途：双击/连按 Enter 不产生第二条记录
-  const input = buildRecordInput({
-    name: $("f-name").value,
-    apiKey: $("f-key").value,
-    vendor: $("f-vendor").value,
-    website: $("f-website").value,
-    note: $("f-note").value,
-    tagsText: $("f-tags").value,
-    endpoints: formState.endpoints,
-  });
-  const err = validateRecordInput(input);
-  if (err) {
-    $("form-error").textContent = err;
-    return;
-  }
-
-  submitting = true;
-  $("form-save").disabled = true;
-  try {
-    const view = state.editingId
-      ? await api.updateRecord(state.editingId, input)
-      : await api.addRecord(input);
-    applyView(view);
-    $("record-dialog").close();
-  } catch (err2) {
-    $("form-error").textContent = String(err2);
-  } finally {
-    submitting = false;
-    $("form-save").disabled = false;
-  }
-}
+    }),
+  onOpened: () => {
+    vendorDd.highlighted = -1;
+    closeVendorPanel();
+  },
+});
 
 async function onDelete(rec) {
   const ok = await message(`确定删除 “${rec.name}” ？此操作不可撤销。`, {
@@ -626,9 +437,7 @@ async function onDelete(rec) {
   });
   if (!ok) return;
   try {
-    const view = await api.deleteRecord(rec.id);
-    if (state.selectedId === rec.id) state.selectedId = null;
-    applyView(view);
+    listModel.setRecords(await api.deleteRecord(rec.id));
   } catch (e) {
     showToast(String(e));
   }
@@ -638,11 +447,14 @@ async function onDelete(rec) {
 // HTML5 drag-and-drop is unreliable inside Tauri's WebView2 on Windows (the
 // native DnD layer swallows dragover/drop), so reordering is implemented with
 // pointer events: a ghost box follows the cursor, the source row hides and
-// the rows below make room for a slot marker, and on pointerup the order is
-// committed via `reorder_records` (persists to disk). Reorder is disabled
-// when a filter is active (handle is not rendered).
+// the rows below make room for a slot marker, and on pointerup the resolved
+// order is committed via `reorder_records` / `reorder_vendors` (persists to
+// disk). Filtering never disables dragging: a drop below the last visible
+// row of a filtered view lands right after that row in the global order —
+// the drop decision lives in order.js (dropTarget), this section is pointer
+// plumbing and DOM only.
 const drag = {
-  el: null, id: null, beforeId: null, moved: false, suppressClick: false,
+  el: null, id: null, kind: null, beforeId: null, moved: false, suppressClick: false,
   list: null, allIds: [], startX: 0, startY: 0, offsetY: 0, rowHeight: 0,
   ghost: null, slot: null,
 };
@@ -684,9 +496,10 @@ function onHandlePointerDown(e) {
   drag.list = list;
   drag.el = li;
   drag.id = itemIdOf(li);
+  drag.kind = list === $("record-list") ? "records" : "vendors";
   drag.beforeId = null;
   drag.moved = false;
-  drag.allIds = list === $("record-list") ? state.records.map((r) => r.id) : state.vendors;
+  drag.allIds = drag.kind === "records" ? state.records.map((r) => r.id) : state.vendors;
   drag.startX = e.clientX;
   drag.startY = e.clientY;
   drag.offsetY = e.clientY - li.getBoundingClientRect().top;
@@ -719,14 +532,14 @@ function onHandlePointerMove(e) {
   drag.ghost.style.top = `${e.clientY - drag.offsetY}px`;
   // Move the slot marker to the insertion point (below the cursor); rows
   // below it shift down by one row height.
-  let beforeId = insertionSlot(rowGeometry(drag.list), e.clientY);
-  if (beforeId === null && drag.list === $("record-list")) {
-    // Dropped below the last visible row of a filtered view: the record
-    // lands right after that row in the global order, not at vault's end.
-    const visible = visibleRecords();
-    const lastVisibleId = visible.length ? visible[visible.length - 1].id : null;
-    beforeId = nextAfterId(drag.allIds, lastVisibleId);
-  }
+  const visible = drag.kind === "records" ? listModel.visibleRecords() : null;
+  const beforeId = dropTarget({
+    allIds: drag.allIds,
+    geometry: rowGeometry(drag.list),
+    clientY: e.clientY,
+    listKind: drag.kind,
+    lastVisibleId: visible?.length ? visible[visible.length - 1].id : null,
+  });
   if (beforeId === drag.beforeId) return;
   drag.beforeId = beforeId;
   clearDropSlot();
@@ -747,28 +560,26 @@ function onHandlePointerUp(e) {
   window.removeEventListener("pointerup", onHandlePointerUp);
   window.removeEventListener("pointercancel", onHandlePointerUp);
   const el = drag.el;
-  const list = drag.list;
   drag.el = null;
   if (!drag.moved) return; // plain click on the handle — selects the row
   clearGhost();
   clearDropSlot();
   el.classList.remove("dragging");
-  const nextOrder = moveBefore(drag.allIds, drag.id, drag.beforeId);
+  const repaint = () => (drag.kind === "records" ? renderList() : render());
+  const { order: nextOrder, changed } = moveBefore(drag.allIds, drag.id, drag.beforeId);
   drag.suppressClick = true; // the click trailing a drag must not select
-  if (nextOrder.every((id, i) => id === drag.allIds[i])) {
-    if (list === $("record-list")) renderList();
-    else render(); // nothing actually changed — restore
+  if (!changed) {
+    repaint(); // nothing actually changed — restore
     return;
   }
-  const commit = list === $("record-list")
+  const commit = drag.kind === "records"
     ? api.reorderRecords(nextOrder)
     : api.reorderVendors(nextOrder);
   commit
-    .then(applyView)
+    .then((view) => listModel.setRecords(view))
     .catch((err) => {
       showToast(String(err));
-      if (list === $("record-list")) renderList();
-      else render(); // restore the pre-drag order
+      repaint(); // restore the pre-drag order
     });
 }
 
@@ -804,19 +615,17 @@ function wireEvents() {
   // pre-applied (preset auto-fill included); otherwise a plain empty form.
   // "未分组"是展示层合成项，不能作为厂商预填进表单。
   $("add-btn").addEventListener("click", () => {
-    if (state.vendor && state.vendor !== UNGROUPED) openAddWithVendor(state.vendor);
-    else openForm(null);
+    formSession.open(
+      state.vendor && !isUngroupedKey(state.vendor)
+        ? { kind: "quick-add", vendor: state.vendor }
+        : { kind: "add" }
+    );
   });
   $("search").addEventListener("input", (e) => {
-    state.query = e.target.value;
-    renderList();
+    listModel.setQuery(e.target.value);
   });
 
-  $("filter-all").addEventListener("click", () => {
-    state.vendor = null;
-    state.tag = null;
-    render();
-  });
+  $("filter-all").addEventListener("click", () => listModel.clearFilters());
 
   // delegated rail clicks — a drag that just ended must not toggle the filter
   $("vendor-list").addEventListener("click", (e) => {
@@ -827,14 +636,12 @@ function wireEvents() {
     const li = e.target.closest("li");
     const b = li?.querySelector("[data-vendor]");
     if (!b) return;
-    state.vendor = state.vendor === b.dataset.vendor ? null : b.dataset.vendor;
-    render();
+    listModel.toggleVendor(b.dataset.vendor);
   });
   $("tag-list").addEventListener("click", (e) => {
     const b = e.target.closest("[data-tag]");
     if (!b) return;
-    state.tag = state.tag === b.dataset.tag ? null : b.dataset.tag;
-    render();
+    listModel.toggleTag(b.dataset.tag);
   });
 
   // delegated record selection (click + keyboard)。选中只更新行高亮 + 详情，
@@ -846,7 +653,7 @@ function wireEvents() {
     }
     const item = e.target.closest("[data-id]");
     if (!item) return;
-    selectRecord(item.dataset.id);
+    listModel.select(item.dataset.id);
   };
   $("record-list").addEventListener("click", selectFrom);
   $("record-list").addEventListener("keydown", (e) => {
@@ -870,8 +677,8 @@ function wireEvents() {
       return;
     }
     if (e.target.closest("#copy-key")) withCopied($("copy-key"), () => copyValue(rec.api_key));
-    else if (e.target.closest("#edit-btn")) openForm(rec);
-    else if (e.target.closest("#duplicate-btn")) openDuplicateForm(rec);
+    if (e.target.closest("#edit-btn")) formSession.open({ kind: "edit", rec });
+    else if (e.target.closest("#duplicate-btn")) formSession.open({ kind: "duplicate", rec });
     else if (e.target.closest("#delete-btn")) onDelete(rec);
   });
 
@@ -883,33 +690,38 @@ function wireEvents() {
 
   // empty-state buttons (delegated, they re-render)
   $("empty-state").addEventListener("click", (e) => {
-    if (e.target.id === "empty-add") openForm(null);
+    if (e.target.id === "empty-add") formSession.open({ kind: "add" });
     if (e.target.id === "empty-clear") {
-      state.query = "";
-      state.vendor = null;
-      state.tag = null;
       $("search").value = "";
-      render();
+      listModel.setQuery("");
+      listModel.clearFilters();
     }
   });
 
-  $("record-form").addEventListener("submit", onFormSubmit);
-  $("form-cancel").addEventListener("click", () => $("record-dialog").close());
+  $("record-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const view = await formSession.submit();
+    if (view) {
+      listModel.setRecords(view);
+      formSession.close();
+    }
+  });
+  $("form-cancel").addEventListener("click", () => formSession.close());
   // 点击 dialog 外部区域（backdrop）/ Esc 关闭 — 有未保存修改时先确认
   $("record-dialog").addEventListener("click", (e) => {
     const rect = $("record-dialog").getBoundingClientRect();
     if (e.clientX < rect.left || e.clientX > rect.right ||
       e.clientY < rect.top || e.clientY > rect.bottom) {
-      guardedCloseDialog();
+      formSession.confirmClose();
     }
   });
   $("record-dialog").addEventListener("cancel", (e) => {
     e.preventDefault(); // Esc 不直接丢弃，走同一守卫
-    guardedCloseDialog();
+    formSession.confirmClose();
   });
   // Vendor dropdown: open on focus/typing, filter as you type, keyboard + click
-  // selection, click-outside close. Value changes run the auto-fill rule once —
-  // the `applied` guard stops a later blur from re-applying and clobbering edits.
+  // selection, click-outside close. Value changes route through the session —
+  // its applied-vendor guard stops a later blur from re-applying and clobbering.
   $("f-vendor").addEventListener("focus", openVendorPanel);
   // Reopen after the panel was closed by a click-outside (focus stays in input).
   $("f-vendor").addEventListener("click", () => {
@@ -922,9 +734,7 @@ function wireEvents() {
   });
   $("f-vendor").addEventListener("keydown", onVendorKeydown);
   $("f-vendor").addEventListener("blur", closeVendorPanel);
-  $("f-vendor").addEventListener("change", () => {
-    if ($("f-vendor").value !== vendorDd.applied) onVendorChange();
-  });
+  $("f-vendor").addEventListener("change", () => formSession.setVendor($("f-vendor").value));
   $("vendor-dd-list").addEventListener("mousedown", (e) => {
     e.preventDefault(); // keep focus in the input so blur doesn't commit first
     const item = e.target.closest("[data-vendor]");
@@ -933,16 +743,14 @@ function wireEvents() {
   document.addEventListener("click", (e) => {
     if (vendorDd.open && !e.target.closest("#vendor-dd")) closeVendorPanel();
   });
-  $("f-standards-group").addEventListener("click", onStdGroupClick);
+  $("f-standards-group").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-std]");
+    if (btn) formSession.toggleStd(btn.dataset.std);
+  });
   // Typing in a URL row updates its standard live (drives lit/gray button state).
   $("f-url-rows").addEventListener("input", (e) => {
     const row = e.target.closest("[data-std]");
-    if (!row) return;
-    const std = row.dataset.std;
-    if (std in formState.endpoints) {
-      formState.endpoints[std] = e.target.value;
-      syncStdToggles();
-    }
+    if (row) formSession.setUrl(row.dataset.std, e.target.value);
   });
 }
 

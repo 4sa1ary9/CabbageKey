@@ -6,6 +6,9 @@ import {
   UNGROUPED,
   vendorFilterValid,
   tagFilterValid,
+  vendorKey,
+  isUngroupedKey,
+  railVendorGroups,
 } from "./filter.js";
 
 const recs = [
@@ -108,5 +111,57 @@ describe("emptyStateKind", () => {
   });
   it("null when records are visible", () => {
     expect(emptyStateKind({ totalRecords: 4, visibleRecords: 2, hasActiveFilter: true })).toBeNull();
+  });
+});
+
+describe("vendorKey / isUngroupedKey", () => {
+  it("maps empty and whitespace-only vendors to the 未分组 sentinel", () => {
+    expect(vendorKey("")).toBe(UNGROUPED);
+    expect(vendorKey("   ")).toBe(UNGROUPED);
+    expect(vendorKey(null)).toBe(UNGROUPED);
+    expect(vendorKey("DeepSeek")).toBe("DeepSeek");
+  });
+
+  it("identifies the sentinel value only", () => {
+    expect(isUngroupedKey(UNGROUPED)).toBe(true);
+    expect(isUngroupedKey("DeepSeek")).toBe(false);
+    expect(isUngroupedKey(null)).toBe(false);
+  });
+});
+
+describe("railVendorGroups", () => {
+  it("lists real vendors in vault order with counts", () => {
+    const vendored = recs.filter((r) => r.vendor);
+    expect(railVendorGroups(vendored, ["OpenAI", "DeepSeek"])).toEqual([
+      { key: "OpenAI", count: 1, draggable: true },
+      { key: "DeepSeek", count: 2, draggable: true },
+    ]);
+  });
+
+  it("keeps zero-count vendors (they are still valid filter targets)", () => {
+    const entries = railVendorGroups([recs[0]], ["OpenAI", "DeepSeek"]);
+    expect(entries.find((e) => e.key === "OpenAI").count).toBe(0);
+  });
+
+  it("synthesizes 未分组 when ungrouped records exist", () => {
+    const entries = railVendorGroups(recs, ["DeepSeek"]);
+    expect(entries).toEqual([
+      { key: "DeepSeek", count: 2, draggable: true },
+      { key: UNGROUPED, count: 1, draggable: false },
+    ]);
+  });
+
+  it("skips the synthesized entry when a real vendor is named 未分组", () => {
+    const records = [
+      { id: "1", name: "a", api_key: "k", vendor: "未分组", tags: [] },
+      { id: "2", name: "b", api_key: "k", vendor: "", tags: [] },
+    ];
+    const entries = railVendorGroups(records, ["未分组"]);
+    expect(entries).toEqual([{ key: "未分组", count: 2, draggable: true }]);
+  });
+
+  it("omits 未分组 when every record has a vendor", () => {
+    const vendored = recs.filter((r) => r.vendor);
+    expect(railVendorGroups(vendored, ["DeepSeek"]).map((e) => e.key)).toEqual(["DeepSeek"]);
   });
 });

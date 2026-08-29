@@ -1,39 +1,63 @@
 import { describe, it, expect } from "vitest";
-import { moveBefore, insertionSlot, nextAfterId } from "./order.js";
+import { moveBefore, insertionSlot, nextAfterId, dropTarget } from "./order.js";
 
 describe("moveBefore", () => {
   it("moves an earlier element to just before a later one", () => {
-    expect(moveBefore(["a", "b", "c"], "a", "c")).toEqual(["b", "a", "c"]);
+    expect(moveBefore(["a", "b", "c"], "a", "c")).toEqual({
+      order: ["b", "a", "c"],
+      changed: true,
+    });
   });
 
   it("moves a later element to just before an earlier one", () => {
-    expect(moveBefore(["a", "b", "c"], "c", "a")).toEqual(["c", "a", "b"]);
+    expect(moveBefore(["a", "b", "c"], "c", "a")).toEqual({
+      order: ["c", "a", "b"],
+      changed: true,
+    });
   });
 
   it("moves to the end when beforeId is null", () => {
-    expect(moveBefore(["a", "b", "c"], "a", null)).toEqual(["b", "c", "a"]);
+    expect(moveBefore(["a", "b", "c"], "a", null)).toEqual({
+      order: ["b", "c", "a"],
+      changed: true,
+    });
   });
 
   it("is a no-op when the element is already in place", () => {
-    expect(moveBefore(["a", "b", "c"], "a", "b")).toEqual(["a", "b", "c"]);
-    expect(moveBefore(["a", "b", "c"], "c", null)).toEqual(["a", "b", "c"]);
+    expect(moveBefore(["a", "b", "c"], "a", "b")).toEqual({
+      order: ["a", "b", "c"],
+      changed: false,
+    });
+    expect(moveBefore(["a", "b", "c"], "c", null)).toEqual({
+      order: ["a", "b", "c"],
+      changed: false,
+    });
   });
 
   it("is a no-op when fromId equals beforeId", () => {
-    expect(moveBefore(["a", "b", "c"], "b", "b")).toEqual(["a", "b", "c"]);
+    expect(moveBefore(["a", "b", "c"], "b", "b")).toEqual({
+      order: ["a", "b", "c"],
+      changed: false,
+    });
   });
 
   it("leaves the list unchanged for an unknown fromId", () => {
-    expect(moveBefore(["a", "b"], "nope", "b")).toEqual(["a", "b"]);
+    expect(moveBefore(["a", "b"], "nope", "b")).toEqual({
+      order: ["a", "b"],
+      changed: false,
+    });
   });
 
   it("leaves the list unchanged for an unknown beforeId", () => {
-    expect(moveBefore(["a", "b"], "a", "nope")).toEqual(["a", "b"]);
+    expect(moveBefore(["a", "b"], "a", "nope")).toEqual({
+      order: ["a", "b"],
+      changed: false,
+    });
   });
 
   it("handles a single-element list", () => {
-    expect(moveBefore(["a"], "a", null)).toEqual(["a"]);
-    expect(moveBefore(["a"], "a", "a")).toEqual(["a"]);
+    expect(moveBefore(["a"], "a", null)).toEqual({ order: ["a"], changed: false });
+    expect(moveBefore(["a"], "a", "a")).toEqual({ order: ["a"], changed: false });
   });
 
   it("never mutates the input list", () => {
@@ -85,5 +109,72 @@ describe("nextAfterId", () => {
     expect(nextAfterId(["a", "b"], "nope")).toBeNull();
     expect(nextAfterId(["a", "b"], null)).toBeNull();
     expect(nextAfterId(["a", "b"], undefined)).toBeNull();
+  });
+});
+
+describe("dropTarget", () => {
+  const rows = [
+    { id: "a", top: 0, bottom: 40 },
+    { id: "b", top: 40, bottom: 80 },
+  ];
+
+  it("record list: below the last visible row lands after it in the global order", () => {
+    expect(
+      dropTarget({
+        allIds: ["a", "b", "x"],
+        geometry: rows,
+        clientY: 100,
+        listKind: "records",
+        lastVisibleId: "b",
+      })
+    ).toBe("x");
+  });
+
+  it("record list: below the vault's last row stays null (append at end)", () => {
+    expect(
+      dropTarget({
+        allIds: ["a", "b"],
+        geometry: rows,
+        clientY: 100,
+        listKind: "records",
+        lastVisibleId: "b",
+      })
+    ).toBeNull();
+  });
+
+  it("record list: a geometry hit passes through untouched", () => {
+    expect(
+      dropTarget({
+        allIds: ["a", "b", "x"],
+        geometry: rows,
+        clientY: 10,
+        listKind: "records",
+        lastVisibleId: "b",
+      })
+    ).toBe("a");
+  });
+
+  it("vendor list: null stays null (no filtered-view correction)", () => {
+    expect(
+      dropTarget({
+        allIds: ["a", "b", "x"],
+        geometry: rows,
+        clientY: 100,
+        listKind: "vendors",
+        lastVisibleId: "b",
+      })
+    ).toBeNull();
+  });
+
+  it("vendor list: a geometry hit passes through untouched", () => {
+    expect(
+      dropTarget({
+        allIds: ["a", "b"],
+        geometry: rows,
+        clientY: 10,
+        listKind: "vendors",
+        lastVisibleId: null,
+      })
+    ).toBe("a");
   });
 });

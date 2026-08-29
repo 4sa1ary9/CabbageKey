@@ -96,13 +96,15 @@ export INCLUDE="$MSVC/include:$SDK/Include/10.0.26100.0/ucrt:$SDK/Include/10.0.2
 ## 架构速查（细节看 docs/DESIGN.md）
 
 - `src-tauri/src/vault.rs` — 记录 schema（name*/api_key* 必填，vendor/endpoints/website/note/tags 可选，uuid 主键）、CRUD、必填校验、原子写、**明文格式 golden test**、历史列表管理（`VaultHistoryEntry` / `add_vault_history_entry`）。
-- `src-tauri/src/lib.rs` — Tauri 命令层 + 会话态（只有当前 vault + 路径，无任何凭据）。命令：`startup_info` / `vault_exists` / `create_vault` / `open_vault` / `close_vault` / `add_record` / `update_record` / `delete_record` / `reorder_records` / `reorder_vendors` / `get_vault_history` / `remove_vault_history`。config 只存 `last_path` + `vault_history`，写盘走原子写。
+- `src-tauri/src/lib.rs` — Tauri 命令层 + 会话态（只有当前 vault + 路径，无任何凭据）。命令：`startup_info` / `vault_exists` / `create_vault` / `open_vault` / `close_vault` / `add_record` / `update_record` / `delete_record` / `reorder_records` / `reorder_vendors` / `get_vault_history` / `remove_vault_history`；五个变更命令共享 with_vault_mut 协议（lock → 判开 → 变更 → persist → view）。config 只存 `last_path` + `vault_history`，写盘走原子写。
 - `src/api.js` — 前端 ↔ Tauri 命令层的唯一 seam（12 个命令函数；命令名与参数形状只此一处，错误字符串原样穿透，展示方式由调用方决定），已单测。
-- `src/filter.js` — 纯检索逻辑（搜索/厂商/标签叠加），已单测。
+- `src/formSession.js` — 表单对话框生命周期唯一主人（新增/编辑/快加/复制四种模式单一 open 协议、端点状态、未保存守卫、厂商切换确认/回滚、提交协议防双击）；元素句柄注入、jsdom 协议测试。
+- `src/listModel.js` — 列表视图模型：records/筛选/选中状态 + 不变量内验（筛选目标失效复位、选中记录失效清理），变更以 {records, filter, query, selection} 变更面通知 DOM 层，已单测。
+- `src/filter.js` — 纯检索逻辑（搜索/厂商/标签叠加）+ "未分组"展示键全套规则（vendorKey / railVendorGroups / isUngroupedKey），已单测。
 - `src/vendorPresets.js` — 内置 AI 厂商预设数据 + 工具函数（getPreset/getSupportedStandards/getEndpointUrl/normalizeUrl/getStandardLabel）。
 - `src/formState.js` — 表单状态机（预设联动、接口规范 toggle、提交载荷构建/校验），已单测。
-- `src/history.js` — 历史条目文件存在性标注（驱动置灰），已单测。
-- `src/order.js` — 拖拽落点/全局顺序纯逻辑（moveBefore/insertionSlot/nextAfterId），已单测。
+- `src/history.js` — 历史条目并行存在性探测与标注（enrichHistory，existsFn 注入；错误/缺失当失效），已单测。
+- `src/order.js` — 拖拽落点/全局顺序纯逻辑（dropTarget 落点策略含筛选视图回退、moveBefore 返回 {order, changed}、insertionSlot/nextAfterId），已单测。
 - `src/vendorDropdown.js` — 厂商下拉候选构建与过滤，已单测。
 - `src/detailView.js` — 详情面板 HTML 构建（字段序、掩码、时间行、SVG 按钮），已单测。
 - `src/main.js` — 薄 DOM 壳：事件绑定 + 渲染（选择页、三栏、复制反馈、表单同步）。
@@ -110,6 +112,6 @@ export INCLUDE="$MSVC/include:$SDK/Include/10.0.26100.0/ucrt:$SDK/Include/10.0.2
 
 ## 测试
 
-- `cd src-tauri && cargo test` — 后端 30 测试（vault CRUD + 顺序/重排 + golden test + 历史，需先导出构建环境变量或用 `build.ps1`）
-- `bun run test` — 前端 110 测试（filter 16 + vendorPresets 19 + formState 21 + detailView 13 + order 16 + vendorDropdown 7 + history 4 + api 14）
+- `cd src-tauri && cargo test` — 后端 33 测试（vault CRUD + 顺序/重排 + golden test + 历史 + 原子写 + 时间戳历法，需先导出构建环境变量或用 `build.ps1`）
+- `bun run test` — 前端 160 测试（filter 23 + vendorPresets 19 + formState 24 + detailView 13 + order 21 + vendorDropdown 7 + history 4 + api 14 + formSession 21 + listModel 14）
 - 人工端到端走查：见 `docs/TEST-PLAN.md` 的人工清单（直进主界面 → 增 → 搜 → 复制 → 改 → 删 → 整个数据文件夹拷到另一路径直接打开使用）。

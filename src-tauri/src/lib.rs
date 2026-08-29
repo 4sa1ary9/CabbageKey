@@ -9,7 +9,7 @@ pub mod vault;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::Manager;
-use vault::{add_vault_history_entry, Record, RecordInput, Vault, VaultHistoryEntry};
+use vault::{add_vault_history_entry, Record, RecordInput, Vault, VaultError, VaultHistoryEntry};
 
 /// Local, non-synced app config (last used vault + recent history).
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -65,10 +65,14 @@ fn now_iso() -> String {
     // dependency less for a string we generate once per operation.
     use std::time::{SystemTime, UNIX_EPOCH};
     let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    let total_secs = d.as_secs();
-    // Decompose into civil date via the Neri-Schneider algorithm (fast,
-    // branch-light, correct for all years 1–9999).
-    let s = total_secs as i64;
+    iso_from_unix(d.as_secs() as i64)
+}
+
+/// Civil date from Unix seconds via the Neri-Schneider algorithm (fast,
+/// branch-light, correct for all years 1–9999). Pure so the calendar math is
+/// unit-testable — `now_iso` only supplies the current clock.
+fn iso_from_unix(total_secs: i64) -> String {
+    let s = total_secs;
     let days = s / 86400;
     let sec_of_day = s % 86400;
     let z = days + 719468;
@@ -99,6 +103,9 @@ struct VaultView {
     tags: Vec<String>,
 }
 
+/// Snapshot of the whole vault for the frontend. Clones every record on each
+/// call — an intentional choice at personal-vault scale (tens of records),
+/// not an accident waiting to be fixed.
 fn view_of(v: &Vault) -> VaultView {
     VaultView {
         records: v.records.clone(),
@@ -182,19 +189,24 @@ fn persist(s: &Session) -> Result<(), String> {
     vault::atomic_write(&path, &v.to_json()).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn add_record(
-    state: tauri::State<AppState>,
-    input: RecordInput,
+/// The one mutation protocol shared by the five mutating commands:
+/// lock → require an open vault → mutate → persist → fresh view. Each
+/// command contributes only its mutation; nothing is written when the
+/// mutation errors.
+fn with_vault_mut(
+    state: &tauri::State<AppState>,
+    f: impl FnOnce(&mut Vault) -> Result<(), VaultError>,
 ) -> Result<VaultView, String> {
     let mut s = state.0.lock().unwrap();
-    s.vault
-        .as_mut()
-        .ok_or("没有打开的 vault")?
-        .add(input, now_iso())
-        .map_err(|e| e.to_string())?;
+    let vault = s.vault.as_mut().ok_or("没有打开的 vault")?;
+    f(vault).map_err(|e| e.to_string())?;
     persist(&s)?;
     Ok(view_of(s.vault.as_ref().unwrap()))
+}
+
+#[tauri::command]
+fn add_record(state: tauri::State<AppState>, input: RecordInput) -> Result<VaultView, String> {
+    with_vault_mut(&state, |v| v.add(input, now_iso()).map(|_| ()))
 }
 
 #[tauri::command]
@@ -203,43 +215,19 @@ fn update_record(
     id: String,
     input: RecordInput,
 ) -> Result<VaultView, String> {
-    let mut s = state.0.lock().unwrap();
-    s.vault
-        .as_mut()
-        .ok_or("没有打开的 vault")?
-        .update(&id, input, now_iso())
-        .map_err(|e| e.to_string())?;
-    persist(&s)?;
-    Ok(view_of(s.vault.as_ref().unwrap()))
+    with_vault_mut(&state, |v| v.update(&id, input, now_iso()))
 }
 
 #[tauri::command]
 fn delete_record(state: tauri::State<AppState>, id: String) -> Result<VaultView, String> {
-    let mut s = state.0.lock().unwrap();
-    s.vault
-        .as_mut()
-        .ok_or("没有打开的 vault")?
-        .delete(&id)
-        .map_err(|e| e.to_string())?;
-    persist(&s)?;
-    Ok(view_of(s.vault.as_ref().unwrap()))
+    with_vault_mut(&state, |v| v.delete(&id))
 }
 
 /// Apply a new global record order. `ids` must be a permutation of all record
 /// ids; on any invalid id the vault is left untouched and nothing is written.
 #[tauri::command]
-fn reorder_records(
-    state: tauri::State<AppState>,
-    ids: Vec<String>,
-) -> Result<VaultView, String> {
-    let mut s = state.0.lock().unwrap();
-    s.vault
-        .as_mut()
-        .ok_or("没有打开的 vault")?
-        .reorder(&ids)
-        .map_err(|e| e.to_string())?;
-    persist(&s)?;
-    Ok(view_of(s.vault.as_ref().unwrap()))
+fn reorder_records(state: tauri::State<AppState>, ids: Vec<String>) -> Result<VaultView, String> {
+    with_vault_mut(&state, |v| v.reorder(&ids))
 }
 
 /// Apply a new vendor display order. `vendors` must be a permutation of the
@@ -249,14 +237,7 @@ fn reorder_vendors(
     state: tauri::State<AppState>,
     vendors: Vec<String>,
 ) -> Result<VaultView, String> {
-    let mut s = state.0.lock().unwrap();
-    s.vault
-        .as_mut()
-        .ok_or("没有打开的 vault")?
-        .reorder_vendors(&vendors)
-        .map_err(|e| e.to_string())?;
-    persist(&s)?;
-    Ok(view_of(s.vault.as_ref().unwrap()))
+    with_vault_mut(&state, |v| v.reorder_vendors(&vendors))
 }
 
 /// Return the vault history list from config.
@@ -306,4 +287,25 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn iso_from_unix_calendar_anchors() {
+        assert_eq!(iso_from_unix(0), "1970-01-01T00:00:00Z");
+        // 世纪闰日：2000 可被 400 整除 → 闰，2 月有 29 天
+        assert_eq!(iso_from_unix(951782400), "2000-02-29T00:00:00Z");
+        // 四年一遇的闰日
+        assert_eq!(iso_from_unix(1709164800), "2024-02-29T00:00:00Z");
+        assert_eq!(iso_from_unix(1234567890), "2009-02-13T23:31:30Z");
+        assert_eq!(iso_from_unix(1787961600), "2026-08-29T00:00:00Z");
+        // 2100 不被 400 整除 → 非闰：2 月止于 28 日，3 月 1 日紧随其后
+        let y2100 = 4102444800;
+        assert_eq!(iso_from_unix(y2100), "2100-01-01T00:00:00Z");
+        assert_eq!(iso_from_unix(y2100 + 58 * 86400), "2100-02-28T00:00:00Z");
+        assert_eq!(iso_from_unix(y2100 + 59 * 86400), "2100-03-01T00:00:00Z");
+    }
 }

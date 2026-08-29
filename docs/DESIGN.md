@@ -45,7 +45,7 @@
 - **D3 记录 schema：** `id`（uuid 主键，重名按 id 区分）+ `order`（列表显示顺序；旧 vault 无此字段时按文件位置兜底补齐，显式值保留）+ 必填 `name`（用途名称）/ `api_key` + 可选 `vendor` / `endpoints`（接口规范 → 端点 URL 映射，BTreeMap 保证序列化键序确定）/ `website` / `note` / `tags`（多值）/ `created_at` / `updated_at`。完整向后兼容旧字段（缺省自动默认）。
 - **D4 启动流程：无密码。** 启动读本机配置（仅 `last_path` + `vault_history`，无任何凭据），上次 vault 存在则直进主界面；不存在或首次启动进选择页（打开已有 / 新建 / 历史列表，失效路径置灰、可单条移除）。主界面内"切换 vault"关闭当前会话回选择页。
 - **D5 会话状态：只有当前 vault + 路径。** 无密码、无凭据、无哈希校验。`open_vault` 读文件解析 JSON 即载入；`create_vault` 写空 vault。
-- **D6 前端：薄 DOM 壳 + 纯逻辑模块。** `main.js` 只做事件绑定与渲染；检索（filter）、厂商预设（vendorPresets）、表单状态机（formState）、历史标注（history）全部为可单测的纯逻辑模块。
+- **D6 前端：薄 DOM 壳 + 纯逻辑模块。** `main.js` 只做事件绑定与渲染；检索（filter）、厂商预设（vendorPresets）、表单状态机（formState）、表单对话框生命周期（formSession，元素句柄注入）、列表视图模型（listModel，变更面通知）、历史标注（history）、Tauri 命令 seam（api）全部为可单测的模块。
 
 ## 已删除（从加密时代移除，见 ADR-0002）
 

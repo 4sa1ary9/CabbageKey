@@ -6,9 +6,31 @@
  *  never persisted, never part of the backend's vendor list. */
 export const UNGROUPED = "未分组";
 
-/** The one grouping-key rule shared by counts, rail and vendor filter. */
-function vendorKey(vendor) {
+/** The one grouping-key rule shared by counts, rail, vendor filter and the
+ *  list's vendor display: empty/whitespace vendor → the 未分组 sentinel. */
+export function vendorKey(vendor) {
   return vendor && vendor.trim() ? vendor : UNGROUPED;
+}
+
+/** Is this filter value the synthetic 未分组 key? Display layer only — it
+ *  must never reach the backend as a vendor value (e.g. form prefill). */
+export function isUngroupedKey(vendor) {
+  return vendor === UNGROUPED;
+}
+
+/** The vendor rail's entries in display order: real vendors in vault order
+ *  with their counts, plus the synthesized 未分组 entry exactly when
+ *  ungrouped records exist and no real vendor is literally named 未分组.
+ *  The synthesized entry is display-only: not persisted, not drag-reorderable
+ *  (draggable=false → the shell renders no handle). */
+export function railVendorGroups(records, vendors) {
+  const groups = groupByVendor(records);
+  const entries = vendors.map((v) => ({ key: v, count: groups[v] || 0, draggable: true }));
+  const ungrouped = groups[UNGROUPED] || 0;
+  if (ungrouped && !vendors.includes(UNGROUPED)) {
+    entries.push({ key: UNGROUPED, count: ungrouped, draggable: false });
+  }
+  return entries;
 }
 
 /**

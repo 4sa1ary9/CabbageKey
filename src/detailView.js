@@ -2,6 +2,7 @@
 // field order and api_key masking live here (unit-tested).
 import { escapeHtml } from "./html.js";
 import { ALL_STANDARDS, getStandardLabel, normalizeUrl } from "./vendorPresets.js";
+import { endpointState } from "./formState.js";
 
 // 24 bullets — matches the masked-state render; reveal toggle in main.js
 // swaps between this and the real key.
@@ -64,8 +65,8 @@ export function buildDetailBodyHtml(rec) {
       <div class="label">支持的接口规范</div>
       <div class="detail-std-group">
         ${ALL_STANDARDS.map((key) => {
-    const active = key in endpoints;
-    return `<button type="button" class="detail-std-btn" data-std="${key}" data-supported="${active}" data-gray="${active && !endpoints[key]}">${escapeHtml(getStandardLabel(key))}</button>`;
+    const { declared, hasUrl } = endpointState(endpoints, key);
+    return `<button type="button" class="detail-std-btn" data-std="${key}" data-supported="${declared}" data-gray="${declared && !hasUrl}">${escapeHtml(getStandardLabel(key))}</button>`;
   }).join("")}
       </div>
     </div>
