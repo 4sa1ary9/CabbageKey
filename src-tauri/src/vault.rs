@@ -138,7 +138,8 @@ fn validate(input: &RecordInput) -> Result<(), VaultError> {
             return Err(VaultError::InvalidApiStandard(key.clone()));
         }
     }
-    if input.website.len() > 2048 {
+    // 字符数而非字节数：与前端 maxlength（按字符）同一单位，多字节 URL 不被误拒。
+    if input.website.chars().count() > 2048 {
         return Err(VaultError::WebsiteTooLong);
     }
     Ok(())
@@ -378,6 +379,21 @@ mod tests {
         assert_eq!(v.records[0].vendor, "");
         assert!(v.records[0].endpoints.is_empty());
         assert!(v.records[0].tags.is_empty());
+    }
+
+    #[test]
+    fn website_limit_counts_chars_not_bytes() {
+        let mut v = Vault::new();
+        let mut ok = input("n", "k");
+        ok.website = "例".repeat(2048); // 2048 字符 = 6144 字节，应通过
+        v.add(ok, "t0".into()).unwrap();
+
+        let mut bad = input("n", "k");
+        bad.website = "例".repeat(2049); // 多一个字符即拒绝
+        assert!(matches!(
+            v.add(bad, "t0".into()).unwrap_err(),
+            VaultError::WebsiteTooLong
+        ));
     }
 
     #[test]

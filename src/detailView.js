@@ -11,6 +11,25 @@ function field(label, value) {
   return `<div class="detail-field"><div class="label">${label}</div><div class="value">${value}</div></div>`;
 }
 
+/** ISO UTC 字符串 → 本地时间显示；空值返回空串，无法解析时原样返回。 */
+export function formatTimestamp(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString("zh-CN", { hour12: false });
+}
+
+/** 创建/更新时间行：缺失时为空串（老 vault 可能没有）；两者相同只显示创建。 */
+function metaLine(rec) {
+  const parts = [];
+  if (rec.created_at) parts.push(`创建于 ${formatTimestamp(rec.created_at)}`);
+  if (rec.updated_at && rec.updated_at !== rec.created_at) {
+    parts.push(`更新于 ${formatTimestamp(rec.updated_at)}`);
+  }
+  return parts.length
+    ? `<div class="detail-meta">${escapeHtml(parts.join(" · "))}</div>`
+    : "";
+}
+
 /** Inner HTML for the detail panel body: title + fields + actions. */
 export function buildDetailBodyHtml(rec) {
   const endpoints = rec.endpoints || {};
@@ -63,6 +82,7 @@ export function buildDetailBodyHtml(rec) {
       : ""
     }
     ${rec.note ? field("备注", escapeHtml(rec.note)) : ""}
+    ${metaLine(rec)}
     <div class="detail-actions">
       <button class="btn-secondary" id="edit-btn">编辑</button>
       <button class="btn-secondary" id="duplicate-btn">复制</button>

@@ -3,9 +3,9 @@
 // filter.js / vendorPresets.js / formState.js / history.js / order.js
 // (unit-tested); this file is event wiring + rendering glue.
 import { invoke } from "@tauri-apps/api/core";
-import { writeText, clear as clearClipboard } from "@tauri-apps/plugin-clipboard-manager";
-import { open as openDialog, save as saveDialog, message } from "@tauri-apps/plugin-dialog";
-import { filterRecords, groupByVendor, emptyStateKind } from "./filter.js";
+import { writeText, readText, clear as clearClipboard } from "@tauri-apps/plugin-clipboard-manager";
+import { open as openDialog, save as saveDialog, message, ask } from "@tauri-apps/plugin-dialog";
+import { filterRecords, groupByVendor, emptyStateKind, UNGROUPED, vendorFilterValid, tagFilterValid } from "./filter.js";
 import { getEndpointUrl, getStandardLabel, ALL_STANDARDS } from "./vendorPresets.js";
 import { vendorCandidates, filterVendorCandidates } from "./vendorDropdown.js";
 import {
@@ -23,6 +23,7 @@ import { buildDetailBodyHtml, MASKED_API_KEY } from "./detailView.js";
 import { moveBefore, insertionSlot, nextAfterId } from "./order.js";
 
 const CLIPBOARD_CLEAR_SECONDS = 30; // auto-clear window after copy
+const REVEAL_AUTO_MASK_SECONDS = 30; // 明文 key 显示多久后自动回掩码
 
 // ---- session-ish UI state ----
 const state = {
@@ -156,14 +157,19 @@ async function initVaultScreen() {
 
 // ---------------- Copy with clear-countdown ----------------
 let clearTimer = null;
-async function copyValue(label, value) {
+let lastCopiedValue = null;
+async function copyValue(value) {
   await writeText(value);
-  showToast(`${label} 已复制，${CLIPBOARD_CLEAR_SECONDS} 秒后自动清空剪贴板`);
+  lastCopiedValue = value;
+  // 按钮态（"✓ 已复制"）由 withCopied 渲染，toast 只承载自动清空这一个信息。
+  showToast(`剪贴板将在 ${CLIPBOARD_CLEAR_SECONDS} 秒后自动清空`);
   if (clearTimer) clearTimeout(clearTimer);
   clearTimer = setTimeout(async () => {
     try {
-      // Only clear if our value is still there — don't clobber a later copy.
-      await clearClipboard();
+      // Only clear if our value is still there — don't clobber a later copy
+      // (here or in any other app). 读取失败视为内容可能已变，不清空。
+      const current = await readText();
+      if (current === lastCopiedValue) await clearClipboard();
     } catch (_) { }
   }, CLIPBOARD_CLEAR_SECONDS * 1000);
 }
@@ -182,6 +188,10 @@ function applyView(view) {
   state.records = view.records;
   state.vendors = view.vendors;
   state.tags = view.tags;
+  // 筛选目标消失（如该厂商最后一条记录被删/改走）时复位筛选，
+  // 不留"无结果空态 + 左栏无高亮"的死路。
+  if (!vendorFilterValid(state.vendor, state.records, state.vendors)) state.vendor = null;
+  if (!tagFilterValid(state.tag, state.tags)) state.tag = null;
   if (state.selectedId && !state.records.find((r) => r.id === state.selectedId)) {
     state.selectedId = null;
   }
@@ -247,7 +257,12 @@ function onVendorKeydown(e) {
     }
     renderVendorPanel();
   } else if (e.key === "Enter") {
-    if (!vendorDd.open) return; // panel closed → let the form submit normally
+    if (!vendorDd.open) {
+      // panel closed → 确认厂商值并跳下一字段，而不是提交整个表单
+      e.preventDefault();
+      $("f-name").focus();
+      return;
+    }
     e.preventDefault();
     if (vendorDd.highlighted >= 0) applyVendor(vendorDd.list[vendorDd.highlighted]);
     else if ($("f-vendor").value.trim()) applyVendor($("f-vendor").value); // custom vendor
@@ -279,13 +294,20 @@ function renderRail() {
   $("filter-all").dataset.active = (!state.vendor && !state.tag).toString();
 
   const groups = groupByVendor(state.records);
-  $("vendor-list").innerHTML = state.vendors
+  let vendorHtml = state.vendors
     .map(
       (v) =>
         `<li><button class="rail-item" data-vendor="${escapeHtml(v)}" data-active="${state.vendor === v
         }">${escapeHtml(v)} <span class="count">${groups[v] || 0}</span></button><span class="drag-handle" title="按住拖拽排序"></span></li>`
     )
     .join("");
+  // 合成"未分组"项：确有无厂商记录且没有同名真实厂商时才出现；
+  // 无拖拽手柄 — 非真实厂商，不参与 reorder 持久化。
+  const ungroupedCount = state.records.filter((r) => !(r.vendor && r.vendor.trim())).length;
+  if (ungroupedCount && !state.vendors.includes(UNGROUPED)) {
+    vendorHtml += `<li><button class="rail-item" data-vendor="${UNGROUPED}" data-active="${state.vendor === UNGROUPED}">未分组 <span class="count">${ungroupedCount}</span></button></li>`;
+  }
+  $("vendor-list").innerHTML = vendorHtml;
 
   $("tag-list").innerHTML = state.tags
     .map(
@@ -342,9 +364,14 @@ function renderEmptyState(kind) {
     <button class="btn-secondary" id="empty-clear">清除筛选</button>`;
 }
 
+let revealTimer = null;
 function renderDetail() {
   const ph = $("detail-placeholder");
   const content = $("detail-content");
+  if (revealTimer) {
+    clearTimeout(revealTimer);
+    revealTimer = null;
+  }
   const rec = state.records.find((r) => r.id === state.selectedId);
   if (!rec) {
     ph.hidden = false;
@@ -359,18 +386,32 @@ function renderDetail() {
   $("detail-content").querySelector(".detail-url-list").addEventListener("click", (e) => {
     const btn = e.target.closest(".copy-url");
     if (!btn) return;
-    withCopied(btn, () => copyValue("url", btn.dataset.url));
+    withCopied(btn, () => copyValue(btn.dataset.url));
   });
 
-  // reveal toggles the masked key
+  // reveal toggles the masked key; showing it auto re-masks after a window
+  // (same protection window as the clipboard auto-clear)
   $("reveal-btn").onclick = () => {
     const el = $("secret-val");
     const masked = el.dataset.masked === "true";
     el.textContent = masked ? rec.api_key : MASKED_API_KEY;
     el.dataset.masked = (!masked).toString();
     $("reveal-btn").textContent = masked ? "🙈 隐藏" : "👁 显示";
+    if (revealTimer) clearTimeout(revealTimer);
+    if (masked) {
+      revealTimer = setTimeout(() => {
+        revealTimer = null;
+        const el2 = $("secret-val");
+        if (el2 && el2.dataset.masked === "false") {
+          el2.textContent = MASKED_API_KEY;
+          el2.dataset.masked = "true";
+          const btn = $("reveal-btn");
+          if (btn) btn.textContent = "👁 显示";
+        }
+      }, REVEAL_AUTO_MASK_SECONDS * 1000);
+    }
   };
-  $("copy-key").onclick = () => withCopied($("copy-key"), () => copyValue("api_key", rec.api_key));
+  $("copy-key").onclick = () => withCopied($("copy-key"), () => copyValue(rec.api_key));
   $("edit-btn").onclick = () => openForm(rec);
   $("duplicate-btn").onclick = () => openDuplicateForm(rec);
   $("delete-btn").onclick = () => onDelete(rec);
@@ -434,10 +475,41 @@ function fillFormFields(fields) {
   $("form-error").textContent = "";
 }
 
+// 打开时的字段快照 — 供关闭守卫判断"有未保存的修改"。
+function snapshotForm() {
+  return JSON.stringify({
+    name: $("f-name").value,
+    key: $("f-key").value,
+    vendor: $("f-vendor").value,
+    website: $("f-website").value,
+    tags: $("f-tags").value,
+    note: $("f-note").value,
+    endpoints: formState.endpoints,
+  });
+}
+
+let formSnapshot = "";
+
+/** Close the dialog, confirming first when there are unsaved edits.
+ *  Backdrop click / Esc route here; the explicit 取消 button closes directly. */
+async function guardedCloseDialog() {
+  if (snapshotForm() !== formSnapshot) {
+    const ok = await ask("表单有未保存的修改，确定丢弃吗？", {
+      title: "关闭表单",
+      kind: "warning",
+      okLabel: "丢弃",
+      cancelLabel: "继续编辑",
+    });
+    if (!ok) return;
+  }
+  $("record-dialog").close();
+}
+
 // Sync toggles + URL rows, then open the dialog and focus the name field.
 function showRecordDialog() {
   syncStdToggles();
   renderUrlRows();
+  formSnapshot = snapshotForm();
   $("record-dialog").showModal();
   $("f-name").focus();
 }
@@ -474,11 +546,24 @@ function openDuplicateForm(rec) {
   showRecordDialog();
 }
 
-/** Vendor input change: full-replace website + standards from the preset. */
-function onVendorChange() {
+/** Vendor input change: full-replace website + standards from the preset.
+ *  当表单里已有非空端点 URL 时先确认 — 全量替换（自定义厂商则清空）是破坏性的。 */
+async function onVendorChange() {
   const vendor = $("f-vendor").value;
-  vendorDd.applied = vendor;
   const preset = applyVendorPreset(vendor);
+  if (Object.values(formState.endpoints).some((url) => url && url.trim())) {
+    const ok = await ask("切换厂商会替换官网并重新填充端点 URL，已填内容将被覆盖，继续吗？", {
+      title: "切换厂商",
+      kind: "warning",
+      okLabel: "继续",
+      cancelLabel: "取消",
+    });
+    if (!ok) {
+      $("f-vendor").value = vendorDd.applied; // 回退到切换前的厂商
+      return;
+    }
+  }
+  vendorDd.applied = vendor;
   formState = preset;
   $("f-website").value = preset.website;
   syncStdToggles();
@@ -496,8 +581,10 @@ function onStdGroupClick(e) {
   renderUrlRows();
 }
 
+let submitting = false;
 async function onFormSubmit(e) {
   e.preventDefault();
+  if (submitting) return; // 命令在途：双击/连按 Enter 不产生第二条记录
   const input = buildRecordInput({
     name: $("f-name").value,
     apiKey: $("f-key").value,
@@ -513,14 +600,19 @@ async function onFormSubmit(e) {
     return;
   }
 
+  submitting = true;
+  $("form-save").disabled = true;
   try {
     const cmd = state.editingId ? "update_record" : "add_record";
     const args = state.editingId ? { id: state.editingId, input } : { input };
     const view = await invoke(cmd, args);
     applyView(view);
     $("record-dialog").close();
-  } catch (e) {
-    $("form-error").textContent = String(e);
+  } catch (err2) {
+    $("form-error").textContent = String(err2);
+  } finally {
+    submitting = false;
+    $("form-save").disabled = false;
   }
 }
 
@@ -708,8 +800,9 @@ function wireEvents() {
 
   // "+ 新增": with a vendor filter active, open the form with that vendor
   // pre-applied (preset auto-fill included); otherwise a plain empty form.
+  // "未分组"是展示层合成项，不能作为厂商预填进表单。
   $("add-btn").addEventListener("click", () => {
-    if (state.vendor) openAddWithVendor(state.vendor);
+    if (state.vendor && state.vendor !== UNGROUPED) openAddWithVendor(state.vendor);
     else openForm(null);
   });
   $("search").addEventListener("input", (e) => {
@@ -781,13 +874,17 @@ function wireEvents() {
 
   $("record-form").addEventListener("submit", onFormSubmit);
   $("form-cancel").addEventListener("click", () => $("record-dialog").close());
-  // 点击 dialog 外部区域（backdrop）关闭
+  // 点击 dialog 外部区域（backdrop）/ Esc 关闭 — 有未保存修改时先确认
   $("record-dialog").addEventListener("click", (e) => {
     const rect = $("record-dialog").getBoundingClientRect();
     if (e.clientX < rect.left || e.clientX > rect.right ||
       e.clientY < rect.top || e.clientY > rect.bottom) {
-      $("record-dialog").close();
+      guardedCloseDialog();
     }
+  });
+  $("record-dialog").addEventListener("cancel", (e) => {
+    e.preventDefault(); // Esc 不直接丢弃，走同一守卫
+    guardedCloseDialog();
   });
   // Vendor dropdown: open on focus/typing, filter as you type, keyboard + click
   // selection, click-outside close. Value changes run the auto-fill rule once —

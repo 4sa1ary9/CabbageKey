@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildDetailBodyHtml, MASKED_API_KEY } from "./detailView.js";
+import { buildDetailBodyHtml, MASKED_API_KEY, formatTimestamp } from "./detailView.js";
 
 const rec = {
   id: "1",
@@ -67,6 +67,37 @@ describe("api_key masking", () => {
     const div = document.createElement("div");
     div.innerHTML = buildDetailBodyHtml(rec);
     expect(div.textContent).not.toContain("sk-123");
+  });
+});
+
+describe("detail meta timestamps", () => {
+  it("shows 创建/更新 meta when both exist and differ", () => {
+    const r = { ...rec, created_at: "2026-08-01T10:00:00Z", updated_at: "2026-08-02T09:30:00Z" };
+    const div = document.createElement("div");
+    div.innerHTML = buildDetailBodyHtml(r);
+    const meta = div.querySelector(".detail-meta");
+    expect(meta).not.toBeNull();
+    expect(meta.textContent).toContain("创建于");
+    expect(meta.textContent).toContain("更新于");
+  });
+
+  it("shows only 创建于 when updated_at equals created_at", () => {
+    const r = { ...rec, created_at: "2026-08-01T10:00:00Z", updated_at: "2026-08-01T10:00:00Z" };
+    const div = document.createElement("div");
+    div.innerHTML = buildDetailBodyHtml(r);
+    expect(div.querySelector(".detail-meta").textContent).toContain("创建于");
+    expect(div.querySelector(".detail-meta").textContent).not.toContain("更新于");
+  });
+
+  it("omits the meta line for old vaults without timestamps", () => {
+    const div = document.createElement("div");
+    div.innerHTML = buildDetailBodyHtml(rec); // rec 无 created_at/updated_at
+    expect(div.querySelector(".detail-meta")).toBeNull();
+  });
+
+  it("formatTimestamp falls back to the raw value when unparseable", () => {
+    expect(formatTimestamp("")).toBe("");
+    expect(formatTimestamp("garbage")).toBe("garbage");
   });
 });
 

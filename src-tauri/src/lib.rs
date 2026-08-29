@@ -38,7 +38,8 @@ fn load_config(app: &tauri::AppHandle) -> Config {
 fn save_config(app: &tauri::AppHandle, cfg: &Config) -> Result<(), String> {
     let p = config_path(app)?;
     let json = serde_json::to_vec_pretty(cfg).map_err(|e| e.to_string())?;
-    std::fs::write(p, json).map_err(|e| e.to_string())
+    // 与 vault 同一原子写纪律（tmp + rename），防写盘中途崩溃留半截 config。
+    vault::atomic_write(&p, &json).map_err(|e| e.to_string())
 }
 
 /// Record this path as "last used" and promote it in the history list.
@@ -280,6 +281,12 @@ fn remove_vault_history(app: tauri::AppHandle, path: String) -> Result<(), Strin
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 单实例：二次启动聚焦已有窗口，避免两个实例写同一 vault 互相覆盖。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState(Mutex::new(Session::default())))

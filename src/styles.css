@@ -82,6 +82,11 @@ body {
   background: var(--rail-bg);
 }
 
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
@@ -571,6 +576,13 @@ li.drop-slot {
   font-size: 12px;
 }
 
+/* 创建/更新时间（弱化小字，位于操作区上方） */
+.detail-meta {
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-top: var(--s3);
+}
+
 .btn-danger {
   font: inherit;
   background: none;
@@ -816,17 +828,6 @@ li.drop-slot {
   display: flex;
   justify-content: flex-end;
   gap: var(--s2);
-}
-
-/* 窄窗口降级: 折叠左栏 */
-@media (max-width: 820px) {
-  .panes {
-    grid-template-columns: 160px 1fr;
-  }
-
-  .detail {
-    display: none;
-  }
 }
 
 /* ---------- Vault history list (login screen) ---------- */
